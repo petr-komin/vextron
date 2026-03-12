@@ -1,0 +1,96 @@
+/* ─── Vextron Global Styles ───────────────────────────────────────────────── */
+
+:root {
+  --vx-sidebar-width: 240px;
+  --vx-messagelist-width: 360px;
+  --vx-header-height: 48px;
+  --vx-statusbar-height: 28px;
+
+  /* Light theme colors */
+  --vx-bg-primary: #ffffff;
+  --vx-bg-secondary: #f5f6f8;
+  --vx-bg-tertiary: #ebedf0;
+  --vx-bg-hover: #f0f1f4;
+  --vx-text-primary: #1a1a1a;
+  --vx-text-secondary: #444444;
+  --vx-text-muted: #888888;
+  --vx-border: #dcdfe4;
+  --vx-accent: #5b4cd6;
+  --vx-accent-hover: #6d5fde;
+  --vx-danger: #d93025;
+  --vx-success: #188038;
+  --vx-warning: #e37400;
+
+  /* Priority colors */
+  --vx-priority-high: #d93025;
+  --vx-priority-medium: #e37400;
+  --vx-priority-low: #1a73e8;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
+  font-size: 13px;
+  color: var(--vx-text-primary);
+  background-color: var(--vx-bg-primary);
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vx-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vx-text-muted);
+}
+
+/* ─── Selection ──────────────────────────────────────────────────────────── */
+
+::selection {
+  background-color: var(--vx-accent);
+  color: white;
+}
+
+/* ─── PrimeVue overrides ─────────────────────────────────────────────────── */
+
+.p-component {
+  font-size: 13px;
+}
+
+/* ─── Utility classes ────────────────────────────────────────────────────── */
+
+.vx-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vx-flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vx-no-select {
+  user-select: none;
+}
