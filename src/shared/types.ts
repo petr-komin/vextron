@@ -134,10 +134,14 @@ export interface AiClassification {
 
 // ─── Filter types ────────────────────────────────────────────────────────────
 
+export type SearchField = 'from' | 'subject' | 'body'
+
 export interface MessageFilters {
   unreadOnly?: boolean
   dateFrom?: string  // ISO date string
   dateTo?: string    // ISO date string
+  searchQuery?: string
+  searchFields?: SearchField[]  // defaults to all fields if omitted
 }
 
 // ─── Import types ────────────────────────────────────────────────────────────
@@ -163,7 +167,13 @@ export interface ImportProgress {
   currentFile: string
   totalFiles: number
   currentFileIndex: number
+  /** Messages actually inserted into DB */
   messagesImported: number
+  /** Messages processed so far (imported + skipped duplicates) */
+  messagesProcessed: number
+  /** Duplicates skipped so far */
+  duplicatesSkipped: number
+  /** Estimated total messages across all selected files */
   messagesTotal: number
   error?: string
 }
@@ -185,6 +195,8 @@ export interface IpcChannels {
   // Messages
   'messages:list': (folderId: number, page: number, limit: number, filters?: MessageFilters) => Promise<MessageListItem[]>
   'messages:count': (folderId: number, filters?: MessageFilters) => Promise<number>
+  'messages:listUnified': (folderType: FolderType, page: number, limit: number, filters?: MessageFilters) => Promise<MessageListItem[]>
+  'messages:countUnified': (folderType: FolderType, filters?: MessageFilters) => Promise<number>
   'messages:get': (messageId: number) => Promise<Message>
   'messages:sync': (folderId: number) => Promise<void>
   'messages:setFlags': (messageId: number, flags: Partial<MessageFlags>) => Promise<void>

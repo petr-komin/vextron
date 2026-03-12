@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAccountsStore } from '../../stores/accounts'
-import { useFoldersStore } from '../../stores/folders'
+import { useFoldersStore, UNIFIED_INBOX, UNIFIED_SENT, isUnifiedFolder } from '../../stores/folders'
 import type { Account, Folder, FolderType } from '../../../shared/types'
 import Button from 'primevue/button'
 import Badge from 'primevue/badge'
@@ -48,11 +48,17 @@ function isActive(folderId: number): boolean {
   return foldersStore.activeFolderId === folderId
 }
 
+function selectUnified(id: typeof UNIFIED_INBOX | typeof UNIFIED_SENT): void {
+  foldersStore.setActiveFolder(id)
+}
+
 // When active account changes, load folders from DB immediately, then try IMAP sync in background
 watch(
   () => accountsStore.activeAccountId,
   async (accountId) => {
     if (!accountId) return
+    // Don't reset folder if a unified view is active
+    if (isUnifiedFolder(foldersStore.activeFolderId)) return
 
     // Always load from DB first (instant, works for imported accounts too)
     await foldersStore.fetchFolders(accountId)
@@ -81,6 +87,26 @@ watch(
 
 <template>
   <nav class="sidebar vx-no-select">
+    <!-- Unified views (all accounts) -->
+    <div class="unified-section" v-if="accountsStore.hasAccounts">
+      <div
+        class="folder-item unified-item"
+        :class="{ active: foldersStore.activeFolderId === 'unified-inbox' }"
+        @click="selectUnified('unified-inbox')"
+      >
+        <i class="pi pi-inbox folder-icon" />
+        <span class="folder-name">Inbox</span>
+      </div>
+      <div
+        class="folder-item unified-item"
+        :class="{ active: foldersStore.activeFolderId === 'unified-sent' }"
+        @click="selectUnified('unified-sent')"
+      >
+        <i class="pi pi-send folder-icon" />
+        <span class="folder-name">Sent</span>
+      </div>
+    </div>
+
     <!-- Account sections -->
     <div
       v-for="account in accountsStore.accounts"
@@ -173,6 +199,17 @@ watch(
   flex-direction: column;
   height: 100%;
   padding: 8px 0;
+}
+
+.unified-section {
+  padding: 0 0 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--vx-border);
+}
+
+.unified-item {
+  padding-left: 12px !important;
+  font-weight: 500;
 }
 
 .account-section {

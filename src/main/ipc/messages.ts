@@ -1,10 +1,78 @@
 import type { IpcMainInvokeEvent } from 'electron'
-import type { Message, MessageListItem, MessageFlags, EmailAddress } from '../../shared/types'
+import type { Message, MessageListItem, MessageFlags, EmailAddress, MessageFilters, SearchField, FolderType } from '../../shared/types'
 import { getDb } from '../services/db/connection'
 import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
-import { eq, desc, and, sql } from 'drizzle-orm'
+import { eq, desc, and, or, sql, ilike, inArray, type SQL } from 'drizzle-orm'
 import { syncFolderMessages, fetchMessageBody } from '../services/imap/sync'
+
+/** Build shared WHERE conditions from filters (date, unread, search). */
+function buildCommonConditions(filters?: MessageFilters): SQL[] {
+  const conditions: SQL[] = []
+
+  if (filters?.unreadOnly) {
+    conditions.push(sql`(${messages.flags}->>'seen')::text = 'false'`)
+  }
+  if (filters?.dateFrom) {
+    conditions.push(sql`${messages.date} >= ${new Date(filters.dateFrom)}`)
+  }
+  if (filters?.dateTo) {
+    const endDate = new Date(filters.dateTo)
+    endDate.setHours(23, 59, 59, 999)
+    conditions.push(sql`${messages.date} <= ${endDate}`)
+  }
+
+  // Search: each word must match (AND), but each word can match any selected field (OR)
+  if (filters?.searchQuery && filters.searchQuery.trim()) {
+    const words = filters.searchQuery.trim().split(/\s+/).filter(Boolean)
+    const fields: SearchField[] = filters.searchFields?.length
+      ? filters.searchFields
+      : ['from', 'subject', 'body']
+
+    for (const word of words) {
+      const pattern = `%${word}%`
+      const fieldConditions: SQL[] = []
+      for (const field of fields) {
+        if (field === 'from') {
+          fieldConditions.push(ilike(messages.fromName, pattern))
+          fieldConditions.push(ilike(messages.fromAddress, pattern))
+        } else if (field === 'subject') {
+          fieldConditions.push(ilike(messages.subject, pattern))
+        } else if (field === 'body') {
+          fieldConditions.push(ilike(messages.bodyText, pattern))
+        }
+      }
+      if (fieldConditions.length > 0) {
+        conditions.push(or(...fieldConditions)!)
+      }
+    }
+  }
+
+  return conditions
+}
+
+/** Build WHERE conditions for a single folder. */
+function buildFilterConditions(folderId: number, filters?: MessageFilters): SQL[] {
+  return [eq(messages.folderId, folderId), ...buildCommonConditions(filters)]
+}
+
+/** Map row to MessageListItem */
+function rowToListItem(row: typeof messages.$inferSelect): MessageListItem {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    folderId: row.folderId,
+    uid: row.uid,
+    subject: row.subject,
+    from: { name: row.fromName, address: row.fromAddress },
+    date: row.date?.toISOString() ?? '',
+    flags: row.flags as MessageFlags,
+    hasAttachments: row.hasAttachments,
+    preview: row.preview,
+    aiCategory: row.aiCategory ?? undefined,
+    aiPriority: row.aiPriority as MessageListItem['aiPriority']
+  }
+}
 
 export const messagesHandlers = {
   'messages:list': async (
@@ -12,25 +80,11 @@ export const messagesHandlers = {
     folderId: number,
     page: number = 1,
     limit: number = 50,
-    filters?: { unreadOnly?: boolean; dateFrom?: string; dateTo?: string }
+    filters?: MessageFilters
   ): Promise<MessageListItem[]> => {
     const db = getDb()
     const offset = (page - 1) * limit
-
-    const conditions = [eq(messages.folderId, folderId)]
-
-    if (filters?.unreadOnly) {
-      conditions.push(sql`(${messages.flags}->>'seen')::text = 'false'`)
-    }
-    if (filters?.dateFrom) {
-      conditions.push(sql`${messages.date} >= ${new Date(filters.dateFrom)}`)
-    }
-    if (filters?.dateTo) {
-      // Include the entire end day
-      const endDate = new Date(filters.dateTo)
-      endDate.setHours(23, 59, 59, 999)
-      conditions.push(sql`${messages.date} <= ${endDate}`)
-    }
+    const conditions = buildFilterConditions(folderId, filters)
 
     const rows = await db
       .select()
@@ -40,42 +94,79 @@ export const messagesHandlers = {
       .limit(limit)
       .offset(offset)
 
-    return rows.map((row): MessageListItem => ({
-      id: row.id,
-      accountId: row.accountId,
-      folderId: row.folderId,
-      uid: row.uid,
-      subject: row.subject,
-      from: { name: row.fromName, address: row.fromAddress },
-      date: row.date?.toISOString() ?? '',
-      flags: row.flags as MessageFlags,
-      hasAttachments: row.hasAttachments,
-      preview: row.preview,
-      aiCategory: row.aiCategory ?? undefined,
-      aiPriority: row.aiPriority as MessageListItem['aiPriority']
-    }))
+    return rows.map(rowToListItem)
   },
 
   'messages:count': async (
     _event: IpcMainInvokeEvent,
     folderId: number,
-    filters?: { unreadOnly?: boolean; dateFrom?: string; dateTo?: string }
+    filters?: MessageFilters
+  ): Promise<number> => {
+    const db = getDb()
+    const conditions = buildFilterConditions(folderId, filters)
+
+    const [result] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(and(...conditions))
+
+    return result?.count ?? 0
+  },
+
+  /** Unified list: messages across ALL accounts for a given folder type (inbox/sent) */
+  'messages:listUnified': async (
+    _event: IpcMainInvokeEvent,
+    folderType: FolderType,
+    page: number = 1,
+    limit: number = 50,
+    filters?: MessageFilters
+  ): Promise<MessageListItem[]> => {
+    const db = getDb()
+    const offset = (page - 1) * limit
+
+    // Get all folder IDs of the requested type across all accounts
+    const matchingFolders = await db
+      .select({ id: folders.id })
+      .from(folders)
+      .where(eq(folders.type, folderType))
+    const folderIds = matchingFolders.map((f) => f.id)
+    if (folderIds.length === 0) return []
+
+    const conditions: SQL[] = [
+      inArray(messages.folderId, folderIds),
+      ...buildCommonConditions(filters)
+    ]
+
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(and(...conditions))
+      .orderBy(desc(messages.date))
+      .limit(limit)
+      .offset(offset)
+
+    return rows.map(rowToListItem)
+  },
+
+  /** Unified count: messages across ALL accounts for a given folder type */
+  'messages:countUnified': async (
+    _event: IpcMainInvokeEvent,
+    folderType: FolderType,
+    filters?: MessageFilters
   ): Promise<number> => {
     const db = getDb()
 
-    const conditions = [eq(messages.folderId, folderId)]
+    const matchingFolders = await db
+      .select({ id: folders.id })
+      .from(folders)
+      .where(eq(folders.type, folderType))
+    const folderIds = matchingFolders.map((f) => f.id)
+    if (folderIds.length === 0) return 0
 
-    if (filters?.unreadOnly) {
-      conditions.push(sql`(${messages.flags}->>'seen')::text = 'false'`)
-    }
-    if (filters?.dateFrom) {
-      conditions.push(sql`${messages.date} >= ${new Date(filters.dateFrom)}`)
-    }
-    if (filters?.dateTo) {
-      const endDate = new Date(filters.dateTo)
-      endDate.setHours(23, 59, 59, 999)
-      conditions.push(sql`${messages.date} <= ${endDate}`)
-    }
+    const conditions: SQL[] = [
+      inArray(messages.folderId, folderIds),
+      ...buildCommonConditions(filters)
+    ]
 
     const [result] = await db
       .select({ count: sql<number>`count(*)::int` })

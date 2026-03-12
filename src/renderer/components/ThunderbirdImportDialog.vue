@@ -95,7 +95,7 @@ const totalSelectedSize = computed(() => {
 
 const progressPercent = computed(() => {
   if (!progress.value || progress.value.messagesTotal === 0) return 0
-  return Math.round((progress.value.messagesImported / progress.value.messagesTotal) * 100)
+  return Math.round((progress.value.messagesProcessed / progress.value.messagesTotal) * 100)
 })
 
 // ── Auto-select account when profile changes ─────────────────────────────────
@@ -470,7 +470,13 @@ function onDone(): void {
             <strong>{{ progress.currentFile }}</strong>
           </span>
           <span>
-            {{ progress.messagesImported }} messages imported
+            {{ progress.messagesProcessed }} / ~{{ progress.messagesTotal }} processed
+          </span>
+        </div>
+        <div v-if="progress && (progress.messagesImported > 0 || progress.duplicatesSkipped > 0)" class="progress-counts">
+          <span>{{ progress.messagesImported }} imported</span>
+          <span v-if="progress.duplicatesSkipped > 0" class="skipped-count">
+            {{ progress.duplicatesSkipped }} duplicates skipped
           </span>
         </div>
       </div>
@@ -623,6 +629,19 @@ function onDone(): void {
   font-size: 12px;
   color: var(--vx-text-muted);
   margin-top: 8px;
+}
+
+.progress-counts {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--vx-text-secondary);
+  margin-top: 4px;
+}
+
+.skipped-count {
+  color: var(--vx-text-muted);
+  font-style: italic;
 }
 
 .result-details {

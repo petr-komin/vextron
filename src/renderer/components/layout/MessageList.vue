@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMessagesStore } from '../../stores/messages'
-import { useFoldersStore } from '../../stores/folders'
-import type { MessageListItem, MessageFilters } from '../../../shared/types'
+import { useFoldersStore, isUnifiedFolder } from '../../stores/folders'
+import type { MessageListItem, MessageFilters, SearchField } from '../../../shared/types'
 import ProgressSpinner from 'primevue/progressspinner'
 import SelectButton from 'primevue/selectbutton'
 import DatePicker from 'primevue/datepicker'
+import InputText from 'primevue/inputtext'
+import Checkbox from 'primevue/checkbox'
 
 const messagesStore = useMessagesStore()
 const foldersStore = useFoldersStore()
@@ -21,6 +23,22 @@ const readFilterOptions = [
 const dateRange = ref<Date[] | null>(null)
 let suppressFilterWatch = false
 
+// Search state
+const searchQuery = ref('')
+const searchFieldFrom = ref(true)
+const searchFieldSubject = ref(true)
+const searchFieldBody = ref(true)
+const showSearchFields = ref(false)
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
+
+function getSelectedSearchFields(): SearchField[] {
+  const fields: SearchField[] = []
+  if (searchFieldFrom.value) fields.push('from')
+  if (searchFieldSubject.value) fields.push('subject')
+  if (searchFieldBody.value) fields.push('body')
+  return fields
+}
+
 // Build the current filter object and refetch messages
 function applyFilters(): void {
   const filters: MessageFilters = {}
@@ -33,9 +51,37 @@ function applyFilters(): void {
       filters.dateTo = dateRange.value[1].toISOString()
     }
   }
+  if (searchQuery.value.trim()) {
+    filters.searchQuery = searchQuery.value.trim()
+    const fields = getSelectedSearchFields()
+    // Only set searchFields if not all selected (default = all)
+    if (fields.length < 3) {
+      filters.searchFields = fields
+    }
+  }
   messagesStore.setFilters(filters)
   if (foldersStore.activeFolderId) {
     messagesStore.fetchMessages(foldersStore.activeFolderId)
+  }
+}
+
+function onSearchInput(): void {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    applyFilters()
+  }, 300)
+}
+
+function clearSearch(): void {
+  searchQuery.value = ''
+  showSearchFields.value = false
+  applyFilters()
+}
+
+function onSearchFieldChange(): void {
+  // Re-apply search if there's already a query
+  if (searchQuery.value.trim()) {
+    applyFilters()
   }
 }
 
@@ -59,23 +105,27 @@ watch(
       suppressFilterWatch = true
       readFilter.value = 'all'
       dateRange.value = null
+      searchQuery.value = ''
+      showSearchFields.value = false
       messagesStore.clearFilters()
       suppressFilterWatch = false
 
       // Load messages from DB immediately (fast — indexed query)
       await messagesStore.fetchMessages(folderId)
 
-      // Background IMAP sync — refresh message list if new messages arrive
-      syncing.value = true
-      window.electronAPI.messages.sync(folderId).then(async () => {
-        // Sync succeeded — refresh the list to pick up new messages
-        await messagesStore.fetchMessages(folderId)
-      }).catch((err) => {
-        // IMAP unavailable — that's fine, we already show DB data
-        console.warn(`[MessageList] Background sync failed for folder ${folderId}:`, err.message || err)
-      }).finally(() => {
-        syncing.value = false
-      })
+      // Background IMAP sync — only for real (non-unified) folders
+      if (!isUnifiedFolder(folderId)) {
+        syncing.value = true
+        window.electronAPI.messages.sync(folderId).then(async () => {
+          // Sync succeeded — refresh the list to pick up new messages
+          await messagesStore.fetchMessages(folderId)
+        }).catch((err) => {
+          // IMAP unavailable — that's fine, we already show DB data
+          console.warn(`[MessageList] Background sync failed for folder ${folderId}:`, err.message || err)
+        }).finally(() => {
+          syncing.value = false
+        })
+      }
     }
   }
 )
@@ -127,8 +177,8 @@ function onScroll(): void {
 <template>
   <div class="message-list">
     <!-- Folder header -->
-    <div class="list-header vx-no-select" v-if="foldersStore.activeFolder">
-      <span class="list-title">{{ foldersStore.activeFolder.name }}</span>
+    <div class="list-header vx-no-select" v-if="foldersStore.activeFolderId">
+      <span class="list-title">{{ foldersStore.activeFolderName }}</span>
       <span class="list-count">
         <i v-if="syncing" class="pi pi-spin pi-sync" style="font-size: 11px; margin-right: 4px" />
         {{ messagesStore.messageList.length }} / {{ messagesStore.totalCount }}
@@ -166,6 +216,50 @@ function onScroll(): void {
         >
           <i class="pi pi-times" />
         </button>
+      </div>
+    </div>
+
+    <!-- Search bar -->
+    <div class="search-bar vx-no-select" v-if="foldersStore.activeFolderId">
+      <div class="search-input-wrapper">
+        <i class="pi pi-search search-icon" />
+        <InputText
+          v-model="searchQuery"
+          placeholder="Search messages..."
+          class="search-input"
+          @input="onSearchInput"
+          @keydown.escape="clearSearch"
+        />
+        <button
+          v-if="searchQuery"
+          class="search-clear"
+          @click="clearSearch"
+          title="Clear search"
+        >
+          <i class="pi pi-times" />
+        </button>
+        <button
+          class="search-fields-toggle"
+          :class="{ active: showSearchFields }"
+          @click="showSearchFields = !showSearchFields"
+          title="Search fields"
+        >
+          <i class="pi pi-sliders-h" />
+        </button>
+      </div>
+      <div v-if="showSearchFields" class="search-fields">
+        <label class="search-field-option">
+          <Checkbox v-model="searchFieldFrom" :binary="true" @change="onSearchFieldChange" />
+          <span>From</span>
+        </label>
+        <label class="search-field-option">
+          <Checkbox v-model="searchFieldSubject" :binary="true" @change="onSearchFieldChange" />
+          <span>Subject</span>
+        </label>
+        <label class="search-field-option">
+          <Checkbox v-model="searchFieldBody" :binary="true" @change="onSearchFieldChange" />
+          <span>Body</span>
+        </label>
       </div>
     </div>
 
@@ -238,7 +332,8 @@ function onScroll(): void {
     <!-- Empty state -->
     <div v-else-if="!messagesStore.loading && foldersStore.activeFolderId" class="list-empty">
       <i class="pi pi-inbox" style="font-size: 2rem; margin-bottom: 8px" />
-      <p v-if="readFilter === 'unread'">No unread messages</p>
+      <p v-if="searchQuery">No messages matching "{{ searchQuery }}"</p>
+      <p v-else-if="readFilter === 'unread'">No unread messages</p>
       <p v-else>No messages in this folder</p>
     </div>
 
@@ -330,6 +425,93 @@ function onScroll(): void {
 
 .filter-clear-date:hover {
   color: var(--vx-text-primary);
+}
+
+/* Search bar */
+.search-bar {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vx-border);
+  flex-shrink: 0;
+}
+
+.search-input-wrapper {
+  display: flex;
+  align-items: center;
+  background: var(--vx-bg-primary);
+  border: 1px solid var(--vx-border);
+  border-radius: 6px;
+  padding: 0 8px;
+  gap: 6px;
+}
+
+.search-input-wrapper:focus-within {
+  border-color: var(--vx-accent);
+}
+
+.search-icon {
+  font-size: 12px;
+  color: var(--vx-text-muted);
+  flex-shrink: 0;
+}
+
+.search-input {
+  flex: 1;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 5px 0 !important;
+  font-size: 12px !important;
+  outline: none !important;
+}
+
+.search-clear,
+.search-fields-toggle {
+  background: none;
+  border: none;
+  color: var(--vx-text-muted);
+  cursor: pointer;
+  padding: 3px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.search-clear:hover,
+.search-fields-toggle:hover {
+  color: var(--vx-text-primary);
+  background: var(--vx-bg-hover);
+}
+
+.search-fields-toggle.active {
+  color: var(--vx-accent);
+}
+
+.search-fields {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px 0;
+}
+
+.search-field-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--vx-text-secondary);
+  cursor: pointer;
+}
+
+.search-field-option :deep(.p-checkbox) {
+  width: 16px;
+  height: 16px;
+}
+
+.search-field-option :deep(.p-checkbox-box) {
+  width: 16px;
+  height: 16px;
 }
 
 .list-loading {

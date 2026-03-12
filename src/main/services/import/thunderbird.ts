@@ -41,6 +41,8 @@ export interface ImportProgress {
   totalFiles: number
   currentFileIndex: number
   messagesImported: number
+  messagesProcessed: number
+  duplicatesSkipped: number
   messagesTotal: number
   error?: string
 }
@@ -362,29 +364,112 @@ export async function scanThunderbirdPath(rootPath: string): Promise<Thunderbird
 // ─── Mbox Parser ────────────────────────────────────────────────────────────
 
 /**
+ * Lightweight header extraction from a raw email buffer.
+ * Only parses header lines until the first blank line (end of headers).
+ * Returns the four fields needed for dedup hash computation.
+ * This is ~100x faster than simpleParser for messages we'll skip as duplicates.
+ */
+function extractQuickHeaders(raw: Buffer): {
+  messageId: string | null
+  from: string
+  date: string | null
+  subject: string
+} {
+  const result = { messageId: null as string | null, from: '', date: null as string | null, subject: '' }
+
+  // Only read up to the first blank line (end of headers).
+  // Convert just the header portion to string to avoid decoding large bodies.
+  const headerEndIdx = raw.indexOf('\r\n\r\n')
+  const altHeaderEndIdx = raw.indexOf('\n\n')
+  const endIdx = headerEndIdx >= 0
+    ? (altHeaderEndIdx >= 0 ? Math.min(headerEndIdx, altHeaderEndIdx) : headerEndIdx)
+    : altHeaderEndIdx
+  const headerStr = endIdx >= 0
+    ? raw.subarray(0, endIdx).toString('utf-8')
+    : raw.toString('utf-8') // no blank line found — entire buffer is headers (unlikely)
+
+  // Unfold headers: lines starting with whitespace are continuations
+  const unfolded = headerStr.replace(/\r?\n[ \t]+/g, ' ')
+
+  for (const line of unfolded.split(/\r?\n/)) {
+    const colonIdx = line.indexOf(':')
+    if (colonIdx < 1) continue
+
+    const key = line.slice(0, colonIdx).toLowerCase().trim()
+    const value = line.slice(colonIdx + 1).trim()
+
+    switch (key) {
+      case 'message-id':
+        result.messageId = value
+        break
+      case 'from': {
+        // Extract bare email from "Name <email>" or just "email"
+        const match = value.match(/<([^>]+@[^>]+)>/)
+        result.from = match ? match[1].trim() : (value.includes('@') ? value.trim() : '')
+        break
+      }
+      case 'date':
+        result.date = value
+        break
+      case 'subject':
+        result.subject = value
+        break
+    }
+
+    // Early exit once we have all four
+    if (result.messageId && result.from && result.date && result.subject) break
+  }
+
+  return result
+}
+
+/**
  * Parse an mbox file and yield individual raw email messages.
  * Mbox format: messages separated by lines starting with "From "
  * (the mbox "From_" separator line).
+ *
+ * Messages larger than MAX_MESSAGE_SIZE are skipped (logged and discarded)
+ * to avoid freezing on huge attachments.
+ * Periodically yields the event loop so IPC messages can flush.
  */
+const MAX_MESSAGE_SIZE = 25 * 1024 * 1024 // 25 MB
+
 async function* parseMboxFile(filePath: string): AsyncGenerator<Buffer> {
   const stream = createReadStream(filePath)
   const rl = createInterface({ input: stream, crlfDelay: Infinity })
 
   let currentMessage: string[] = []
+  let currentSize = 0
   let inMessage = false
+  let skipping = false  // true when current message exceeds size limit
+  let lineCount = 0
 
   for await (const line of rl) {
     if (line.startsWith('From ')) {
-      // If we have a previous message, yield it
-      if (inMessage && currentMessage.length > 0) {
+      // If we have a previous message, yield it (unless it was too large)
+      if (inMessage && currentMessage.length > 0 && !skipping) {
         yield Buffer.from(currentMessage.join('\r\n'))
+      } else if (skipping) {
+        console.warn(`[Import] Skipped oversized message (${(currentSize / (1024 * 1024)).toFixed(1)} MB) in ${filePath}`)
       }
       currentMessage = []
+      currentSize = 0
       inMessage = true
+      skipping = false
       continue
     }
 
     if (inMessage) {
+      // Check size limit — if exceeded, just drain lines without storing
+      currentSize += line.length + 2 // +2 for \r\n
+      if (currentSize > MAX_MESSAGE_SIZE) {
+        if (!skipping) {
+          skipping = true
+          currentMessage = [] // free memory
+        }
+        continue
+      }
+
       // Unescape mbox "From " escaping: ">From " → "From "
       if (line.startsWith('>From ')) {
         currentMessage.push(line.slice(1))
@@ -392,11 +477,19 @@ async function* parseMboxFile(filePath: string): AsyncGenerator<Buffer> {
         currentMessage.push(line)
       }
     }
+
+    // Yield event loop every 10 000 lines so IPC doesn't starve
+    lineCount++
+    if (lineCount % 10000 === 0) {
+      await new Promise(resolve => setImmediate(resolve))
+    }
   }
 
   // Yield the last message
-  if (currentMessage.length > 0) {
+  if (currentMessage.length > 0 && !skipping) {
     yield Buffer.from(currentMessage.join('\r\n'))
+  } else if (skipping) {
+    console.warn(`[Import] Skipped oversized message (${(currentSize / (1024 * 1024)).toFixed(1)} MB) at end of ${filePath}`)
   }
 }
 
@@ -440,6 +533,11 @@ function extractAddresses(addr: AddressObject | AddressObject[] | undefined): Ar
  * Import selected mbox files into the database, associating with the given account.
  * Creates folders as needed and inserts all messages.
  * Uses dedup_hash (SHA-256 of Message-ID or from+date+subject) to skip duplicates.
+ *
+ * Optimization: loads all existing dedup hashes for the account upfront, then
+ * does a lightweight header-only extraction to compute the hash before deciding
+ * whether to run the expensive full simpleParser. Known duplicates are skipped
+ * without any heavy parsing.
  */
 export async function importMboxFiles(
   accountId: number,
@@ -449,7 +547,19 @@ export async function importMboxFiles(
   const db = getDb()
   let totalImported = 0
   let duplicatesSkipped = 0
+  let messagesProcessed = 0
   let foldersCreated = 0
+  const estimatedTotal = mboxFiles.reduce((sum, f) => sum + f.estimatedMessages, 0)
+
+  // ── Pre-load all existing dedup hashes for this account ──────────────────
+  // Single query, builds an in-memory Set for O(1) lookup.
+  const existingRows = await db
+    .select({ hash: messages.dedupHash })
+    .from(messages)
+    .where(eq(messages.accountId, accountId))
+
+  const existingHashes = new Set(existingRows.map(r => r.hash).filter(Boolean))
+  console.log(`[Import] Pre-loaded ${existingHashes.size} existing dedup hashes for account ${accountId}`)
 
   for (let fileIdx = 0; fileIdx < mboxFiles.length; fileIdx++) {
     const mbox = mboxFiles[fileIdx]
@@ -460,7 +570,9 @@ export async function importMboxFiles(
       totalFiles: mboxFiles.length,
       currentFileIndex: fileIdx,
       messagesImported: totalImported,
-      messagesTotal: mboxFiles.reduce((sum, f) => sum + f.estimatedMessages, 0)
+      messagesProcessed,
+      duplicatesSkipped,
+      messagesTotal: estimatedTotal
     })
 
     // Find or create the folder for this mbox
@@ -505,9 +617,65 @@ export async function importMboxFiles(
 
     uidCounter = (maxUidRow?.maxUid ?? 0) + 1
 
+    // Throttle progress updates — at most every 200ms
+    let lastProgressTime = 0
+
     for await (const rawMessage of parseMboxFile(mbox.path)) {
+      let countedThisMessage = false
       try {
-        const parsed = await simpleParser(rawMessage)
+        const msgSizeMB = (rawMessage.length / (1024 * 1024)).toFixed(1)
+        if (rawMessage.length > 5 * 1024 * 1024) {
+          console.log(`[Import] Large message #${messagesProcessed + 1} in ${mbox.name}: ${msgSizeMB} MB`)
+        }
+
+        // ── Lightweight dedup check ──────────────────────────────────────
+        // Extract just the headers we need (Message-ID, From, Date, Subject)
+        // without running the full MIME parser. This is ~100x faster than
+        // simpleParser for messages we're going to skip anyway.
+        const quickHeaders = extractQuickHeaders(rawMessage)
+        const dedupHash = computeDedupHash({
+          messageId: quickHeaders.messageId,
+          fromAddress: quickHeaders.from,
+          date: quickHeaders.date ? new Date(quickHeaders.date) : null,
+          subject: quickHeaders.subject
+        })
+
+        messagesProcessed++
+        countedThisMessage = true
+
+        if (existingHashes.has(dedupHash)) {
+          // Already in DB — skip expensive full parse entirely
+          duplicatesSkipped++
+
+          // Throttled progress update + event loop yield so IPC messages
+          // actually reach the renderer (without this, the tight skip loop
+          // starves the event loop and progress events queue but never flush)
+          const now = Date.now()
+          if (now - lastProgressTime >= 200) {
+            lastProgressTime = now
+            onProgress?.({
+              phase: 'parsing',
+              currentFile: mbox.name,
+              totalFiles: mboxFiles.length,
+              currentFileIndex: fileIdx,
+              messagesImported: totalImported,
+              messagesProcessed,
+              duplicatesSkipped,
+              messagesTotal: estimatedTotal
+            })
+            // Yield event loop so IPC send() actually flushes to renderer
+            await new Promise(resolve => setImmediate(resolve))
+          }
+          continue
+        }
+
+        // ── Full parse (only for genuinely new messages) ─────────────────
+        // Timeout after 10s to avoid hanging on malformed/huge messages
+        const parsePromise = simpleParser(rawMessage)
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`simpleParser timeout (${msgSizeMB} MB)`)), 10000)
+        )
+        const parsed = await Promise.race([parsePromise, timeoutPromise])
         const fromAddrs = extractAddresses(parsed.from)
         const toAddrs = extractAddresses(parsed.to)
         const ccAddrs = extractAddresses(parsed.cc)
@@ -516,14 +684,6 @@ export async function importMboxFiles(
         const bodyText = parsed.text || ''
         const bodyHtml = parsed.html || ''
         const preview = bodyText.slice(0, 280).replace(/\s+/g, ' ').trim()
-
-        // Compute dedup hash
-        const dedupHash = computeDedupHash({
-          messageId: parsed.messageId,
-          fromAddress: fromAddrs[0]?.address || '',
-          date: parsed.date ?? null,
-          subject: parsed.subject || ''
-        })
 
         // Determine flags from email headers
         const flags = {
@@ -569,34 +729,77 @@ export async function importMboxFiles(
           hasAttachments
         })
 
-        if (batch.length >= BATCH_SIZE) {
-          const inserted = await insertBatchWithDedup(db, batch)
-          totalImported += inserted
-          duplicatesSkipped += batch.length - inserted
-          batch = []
+        // Add to local set so duplicates within the same import are caught too
+        existingHashes.add(dedupHash)
 
+        if (batch.length >= BATCH_SIZE) {
+          const { inserted, failed } = await insertBatchSafe(db, batch)
+          totalImported += inserted
+          duplicatesSkipped += batch.length - inserted - failed
+          batch = []
+        }
+
+        // Throttled progress update
+        const now = Date.now()
+        if (now - lastProgressTime >= 200) {
+          lastProgressTime = now
           onProgress?.({
             phase: 'parsing',
             currentFile: mbox.name,
             totalFiles: mboxFiles.length,
             currentFileIndex: fileIdx,
             messagesImported: totalImported,
-            messagesTotal: mboxFiles.reduce((sum, f) => sum + f.estimatedMessages, 0)
+            messagesProcessed,
+            duplicatesSkipped,
+            messagesTotal: estimatedTotal
           })
         }
       } catch (err) {
-        // Skip unparseable messages but log the error
-        console.error(`[Import] Failed to parse message in ${mbox.name}:`, err instanceof Error ? err.message : err)
+        if (!countedThisMessage) {
+          messagesProcessed++
+        }
+        // Log truncated error — avoid dumping raw email content to console
+        const errMsg = err instanceof Error ? err.message : String(err)
+        console.error(`[Import] Failed to parse message #${messagesProcessed} in ${mbox.name}: ${errMsg.slice(0, 200)}`)
+
+        // Throttled progress + event loop yield in error path too
+        const now = Date.now()
+        if (now - lastProgressTime >= 200) {
+          lastProgressTime = now
+          onProgress?.({
+            phase: 'parsing',
+            currentFile: mbox.name,
+            totalFiles: mboxFiles.length,
+            currentFileIndex: fileIdx,
+            messagesImported: totalImported,
+            messagesProcessed,
+            duplicatesSkipped,
+            messagesTotal: estimatedTotal
+          })
+          await new Promise(resolve => setImmediate(resolve))
+        }
         continue
       }
     }
 
     // Insert remaining batch
     if (batch.length > 0) {
-      const inserted = await insertBatchWithDedup(db, batch)
+      const { inserted, failed } = await insertBatchSafe(db, batch)
       totalImported += inserted
-      duplicatesSkipped += batch.length - inserted
+      duplicatesSkipped += batch.length - inserted - failed
     }
+
+    // Final progress for this file
+    onProgress?.({
+      phase: 'parsing',
+      currentFile: mbox.name,
+      totalFiles: mboxFiles.length,
+      currentFileIndex: fileIdx,
+      messagesImported: totalImported,
+      messagesProcessed,
+      duplicatesSkipped,
+      messagesTotal: estimatedTotal
+    })
 
     // Update folder counts
     const [countResult] = await db
@@ -627,7 +830,9 @@ export async function importMboxFiles(
     totalFiles: mboxFiles.length,
     currentFileIndex: mboxFiles.length,
     messagesImported: totalImported,
-    messagesTotal: totalImported
+    messagesProcessed,
+    duplicatesSkipped,
+    messagesTotal: messagesProcessed
   })
 
   return { totalImported, duplicatesSkipped, foldersCreated }
@@ -651,4 +856,38 @@ async function insertBatchWithDedup(
     .returning({ id: messages.id })
 
   return result.length
+}
+
+/**
+ * Safe batch insert wrapper. Tries the full batch first (fast path).
+ * If the batch INSERT fails (e.g. value too long, constraint violation),
+ * falls back to inserting one-by-one to skip only the problematic messages.
+ */
+async function insertBatchSafe(
+  db: ReturnType<typeof getDb>,
+  batch: Array<typeof messages.$inferInsert>
+): Promise<{ inserted: number; failed: number }> {
+  try {
+    const inserted = await insertBatchWithDedup(db, batch)
+    return { inserted, failed: 0 }
+  } catch (batchErr) {
+    // Batch failed — fall back to one-by-one to find the bad message(s)
+    console.warn(`[Import] Batch insert failed, falling back to one-by-one: ${
+      batchErr instanceof Error ? batchErr.message.slice(0, 150) : 'unknown error'
+    }`)
+    let inserted = 0
+    let failed = 0
+    for (const msg of batch) {
+      try {
+        const result = await insertBatchWithDedup(db, [msg])
+        inserted += result
+      } catch (singleErr) {
+        failed++
+        console.error(`[Import] Skipping bad message (subject: ${
+          (msg.subject || '').slice(0, 80)
+        }): ${singleErr instanceof Error ? singleErr.message.slice(0, 150) : 'unknown error'}`)
+      }
+    }
+    return { inserted, failed }
+  }
 }

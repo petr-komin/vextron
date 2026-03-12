@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, toRaw } from 'vue'
 import type { MessageListItem, Message, MessageFlags, MessageFilters } from '../../shared/types'
+import { isUnifiedFolder, unifiedFolderType, type ActiveFolderId } from './folders'
 
 export const useMessagesStore = defineStore('messages', () => {
   const messageList = ref<MessageListItem[]>([])
@@ -9,7 +10,7 @@ export const useMessagesStore = defineStore('messages', () => {
   const loading = ref(false)
   const loadingMore = ref(false)
   const loadingMessage = ref(false)
-  const currentFolderId = ref<number | null>(null)
+  const currentFolderId = ref<ActiveFolderId>(null)
   const currentPage = ref(1)
   const pageSize = ref(50)
   const totalCount = ref(0)
@@ -25,20 +26,33 @@ export const useMessagesStore = defineStore('messages', () => {
 
   function getPlainFilters(): MessageFilters | undefined {
     const f = toRaw(filters.value)
-    if (!f.unreadOnly && !f.dateFrom && !f.dateTo) return undefined
+    if (!f.unreadOnly && !f.dateFrom && !f.dateTo && !f.searchQuery) return undefined
     return JSON.parse(JSON.stringify(f))
   }
 
-  async function fetchMessages(folderId: number, page: number = 1): Promise<void> {
+  async function fetchMessages(folderId: ActiveFolderId, page: number = 1): Promise<void> {
+    if (!folderId) return
     loading.value = true
     currentFolderId.value = folderId
     currentPage.value = page
     try {
       const plainFilters = getPlainFilters()
-      const [msgs, count] = await Promise.all([
-        window.electronAPI.messages.list(folderId, page, pageSize.value, plainFilters),
-        window.electronAPI.messages.count(folderId, plainFilters)
-      ])
+      let msgs: MessageListItem[]
+      let count: number
+
+      if (isUnifiedFolder(folderId)) {
+        const folderType = unifiedFolderType(folderId)
+        ;[msgs, count] = await Promise.all([
+          window.electronAPI.messages.listUnified(folderType, page, pageSize.value, plainFilters),
+          window.electronAPI.messages.countUnified(folderType, plainFilters)
+        ])
+      } else {
+        ;[msgs, count] = await Promise.all([
+          window.electronAPI.messages.list(folderId, page, pageSize.value, plainFilters),
+          window.electronAPI.messages.count(folderId, plainFilters)
+        ])
+      }
+
       messageList.value = msgs
       totalCount.value = count
     } catch (error) {
@@ -54,9 +68,19 @@ export const useMessagesStore = defineStore('messages', () => {
     const nextPage = currentPage.value + 1
     try {
       const plainFilters = getPlainFilters()
-      const more = await window.electronAPI.messages.list(
-        currentFolderId.value, nextPage, pageSize.value, plainFilters
-      )
+      let more: MessageListItem[]
+
+      if (isUnifiedFolder(currentFolderId.value)) {
+        const folderType = unifiedFolderType(currentFolderId.value)
+        more = await window.electronAPI.messages.listUnified(
+          folderType, nextPage, pageSize.value, plainFilters
+        )
+      } else {
+        more = await window.electronAPI.messages.list(
+          currentFolderId.value, nextPage, pageSize.value, plainFilters
+        )
+      }
+
       if (more.length > 0) {
         messageList.value = [...messageList.value, ...more]
         currentPage.value = nextPage

@@ -8,6 +8,7 @@ import type {
   Account,
   AccountFormData,
   Folder,
+  FolderType,
   Message,
   MessageListItem,
   MessageFlags,
@@ -31,6 +32,8 @@ export interface MailApi {
   messages: {
     list(folderId: number, page?: number, limit?: number, filters?: MessageFilters): Promise<MessageListItem[]>
     count(folderId: number, filters?: MessageFilters): Promise<number>
+    listUnified(folderType: FolderType, page?: number, limit?: number, filters?: MessageFilters): Promise<MessageListItem[]>
+    countUnified(folderType: FolderType, filters?: MessageFilters): Promise<number>
     get(messageId: number): Promise<Message>
     sync(folderId: number): Promise<void>
     setFlags(messageId: number, flags: Partial<MessageFlags>): Promise<void>

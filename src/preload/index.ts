@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AccountFormData, MessageFlags, MessageFilters } from '../shared/types'
+import type { AccountFormData, MessageFlags, MessageFilters, FolderType } from '../shared/types'
 
 /**
  * Strip Vue/Pinia reactive proxies by converting to plain JSON.
@@ -41,6 +41,10 @@ const api = {
       ipcRenderer.invoke('messages:list', folderId, page, limit, filters ? toRaw(filters) : undefined),
     count: (folderId: number, filters?: MessageFilters) =>
       ipcRenderer.invoke('messages:count', folderId, filters ? toRaw(filters) : undefined),
+    listUnified: (folderType: FolderType, page?: number, limit?: number, filters?: MessageFilters) =>
+      ipcRenderer.invoke('messages:listUnified', folderType, page, limit, filters ? toRaw(filters) : undefined),
+    countUnified: (folderType: FolderType, filters?: MessageFilters) =>
+      ipcRenderer.invoke('messages:countUnified', folderType, filters ? toRaw(filters) : undefined),
     get: (messageId: number) => ipcRenderer.invoke('messages:get', messageId),
     sync: (folderId: number) => ipcRenderer.invoke('messages:sync', folderId),
     setFlags: (messageId: number, flags: Partial<MessageFlags>) =>

@@ -1,20 +1,11 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import InputText from 'primevue/inputtext'
-import IconField from 'primevue/iconfield'
-import InputIcon from 'primevue/inputicon'
 import Button from 'primevue/button'
 import { ref } from 'vue'
 import ThunderbirdImportDialog from '../ThunderbirdImportDialog.vue'
 
 const router = useRouter()
-const searchQuery = ref('')
 const importDialogVisible = ref(false)
-
-function onSearch() {
-  // TODO: Implement search (will use AI semantic search)
-  console.log('Search:', searchQuery.value)
-}
 
 function onImported() {
   // Could refresh folder lists, etc.
@@ -27,17 +18,7 @@ function onImported() {
       <span class="header-logo">Vextron</span>
     </div>
 
-    <div class="header-center">
-      <IconField class="search-wrapper">
-        <InputIcon class="pi pi-search" />
-        <InputText
-          v-model="searchQuery"
-          placeholder="Search emails..."
-          class="search-input"
-          @keyup.enter="onSearch"
-        />
-      </IconField>
-    </div>
+    <div class="header-center" />
 
     <div class="header-right">
       <Button
@@ -102,18 +83,6 @@ function onImported() {
 
 .header-center {
   flex: 1;
-  display: flex;
-  justify-content: center;
-  max-width: 500px;
-}
-
-.search-wrapper {
-  width: 100%;
-}
-
-.search-input {
-  width: 100%;
-  font-size: 12px;
 }
 
 .header-right {
