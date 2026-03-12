@@ -50,7 +50,7 @@ watch(readFilter, () => {
   applyFilters()
 })
 
-// Sync + fetch messages when active folder changes
+// Load messages from DB when active folder changes, then try IMAP sync in background
 watch(
   () => foldersStore.activeFolderId,
   async (folderId) => {
@@ -62,17 +62,20 @@ watch(
       messagesStore.clearFilters()
       suppressFilterWatch = false
 
-      // First sync from IMAP (background), then load from DB
-      syncing.value = true
-      try {
-        await window.electronAPI.messages.sync(folderId)
-      } catch (error) {
-        console.error('Folder sync failed:', error)
-      } finally {
-        syncing.value = false
-      }
-      // Load messages from DB (whether sync succeeded or not)
+      // Load messages from DB immediately (fast — indexed query)
       await messagesStore.fetchMessages(folderId)
+
+      // Background IMAP sync — refresh message list if new messages arrive
+      syncing.value = true
+      window.electronAPI.messages.sync(folderId).then(async () => {
+        // Sync succeeded — refresh the list to pick up new messages
+        await messagesStore.fetchMessages(folderId)
+      }).catch((err) => {
+        // IMAP unavailable — that's fine, we already show DB data
+        console.warn(`[MessageList] Background sync failed for folder ${folderId}:`, err.message || err)
+      }).finally(() => {
+        syncing.value = false
+      })
     }
   }
 )
@@ -166,8 +169,8 @@ function onScroll(): void {
       </div>
     </div>
 
-    <!-- Loading state -->
-    <div v-if="messagesStore.loading || syncing" class="list-loading">
+    <!-- Loading state (only show full spinner when loading from DB AND no messages yet) -->
+    <div v-if="messagesStore.loading && messagesStore.messageList.length === 0" class="list-loading">
       <ProgressSpinner
         style="width: 32px; height: 32px"
         strokeWidth="3"

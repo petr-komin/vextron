@@ -6,7 +6,10 @@ export const useFoldersStore = defineStore('folders', () => {
   /** All folders keyed by accountId */
   const foldersByAccount = ref<Map<number, Folder[]>>(new Map())
   const activeFolderId = ref<number | null>(null)
+  /** True while loading folders from DB (blocking — shows spinner) */
   const loading = ref(false)
+  /** True while syncing folders from IMAP (background — non-blocking) */
+  const syncing = ref(false)
 
   const activeFolder = computed((): Folder | null => {
     for (const folders of foldersByAccount.value.values()) {
@@ -37,7 +40,7 @@ export const useFoldersStore = defineStore('folders', () => {
   }
 
   async function syncFolders(accountId: number): Promise<void> {
-    loading.value = true
+    syncing.value = true
     try {
       const folders = await window.electronAPI.folders.sync(accountId)
       foldersByAccount.value.set(accountId, folders)
@@ -45,7 +48,7 @@ export const useFoldersStore = defineStore('folders', () => {
       console.error(`Failed to sync folders for account ${accountId}:`, error)
       throw error
     } finally {
-      loading.value = false
+      syncing.value = false
     }
   }
 
@@ -58,6 +61,7 @@ export const useFoldersStore = defineStore('folders', () => {
     activeFolderId,
     activeFolder,
     loading,
+    syncing,
     getFolders,
     getInbox,
     fetchFolders,

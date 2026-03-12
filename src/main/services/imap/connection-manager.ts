@@ -66,7 +66,10 @@ class ImapConnectionManager {
       secure: config.secure,
       auth: config.auth,
       logger: false,
-      emitLogs: false
+      emitLogs: false,
+      // 10s connect timeout — prevents hanging on unreachable hosts (e.g. imported stub accounts)
+      greetingTimeout: 10000,
+      socketTimeout: 10000
     } as ImapFlowOptions)
   }
 

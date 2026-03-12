@@ -48,29 +48,32 @@ function isActive(folderId: number): boolean {
   return foldersStore.activeFolderId === folderId
 }
 
-// When active account changes, load its folders (from DB first, then sync from IMAP)
+// When active account changes, load folders from DB immediately, then try IMAP sync in background
 watch(
   () => accountsStore.activeAccountId,
   async (accountId) => {
     if (!accountId) return
 
-    const existing = foldersStore.getFolders(accountId)
-    if (existing.length === 0) {
-      // No cached folders — sync from IMAP
-      try {
-        await foldersStore.syncFolders(accountId)
-      } catch (error) {
-        console.error('Failed to sync folders:', error)
-        // Fallback: try loading from DB
-        await foldersStore.fetchFolders(accountId)
-      }
-    }
+    // Always load from DB first (instant, works for imported accounts too)
+    await foldersStore.fetchFolders(accountId)
 
     // Auto-select inbox
     const inbox = foldersStore.getInbox(accountId)
     if (inbox && !foldersStore.activeFolderId) {
       foldersStore.setActiveFolder(inbox.id)
     }
+
+    // Background IMAP sync — fire-and-forget, refresh folders if it succeeds
+    foldersStore.syncFolders(accountId).then(() => {
+      // Re-select inbox if nothing was selected yet
+      const inboxAfterSync = foldersStore.getInbox(accountId)
+      if (inboxAfterSync && !foldersStore.activeFolderId) {
+        foldersStore.setActiveFolder(inboxAfterSync.id)
+      }
+    }).catch((err) => {
+      // IMAP unavailable — that's fine, we already have DB data
+      console.warn(`[Sidebar] Background folder sync failed for account ${accountId}:`, err.message || err)
+    })
   },
   { immediate: true }
 )
@@ -108,7 +111,7 @@ watch(
         v-if="accountsStore.activeAccountId === account.id"
         class="folder-list"
       >
-        <div v-if="foldersStore.loading" class="folder-loading">
+        <div v-if="foldersStore.loading && foldersStore.getFolders(account.id).length === 0" class="folder-loading">
           <i class="pi pi-spin pi-spinner" />
           <span>Loading folders...</span>
         </div>

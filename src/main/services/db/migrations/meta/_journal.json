@@ -15,6 +15,13 @@
       "when": 1773307712645,
       "tag": "0001_clumsy_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773311209953,
+      "tag": "0002_overjoyed_namor",
+      "breakpoints": true
     }
   ]
 }

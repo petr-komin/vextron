@@ -7,7 +7,8 @@ import {
   boolean,
   timestamp,
   jsonb,
-  uniqueIndex
+  uniqueIndex,
+  index
 } from 'drizzle-orm/pg-core'
 import { accounts } from './accounts'
 import { folders } from './folders'
@@ -55,6 +56,16 @@ export const messages = pgTable('messages', {
 
   createdAt: timestamp('created_at').notNull().defaultNow()
 }, (table) => [
+  // Global dedup per account — first import wins, duplicates in other folders are skipped
   uniqueIndex('messages_account_dedup_hash_idx')
-    .on(table.accountId, table.dedupHash)
+    .on(table.accountId, table.dedupHash),
+  // Primary query index: folder listing sorted by date (covers messages:list, messages:count)
+  index('messages_folder_date_idx')
+    .on(table.folderId, table.date),
+  // Account-level queries and cascade deletes
+  index('messages_account_id_idx')
+    .on(table.accountId),
+  // Folder + account combo for sync operations (UID lookup per folder)
+  index('messages_folder_uid_idx')
+    .on(table.folderId, table.uid)
 ])
