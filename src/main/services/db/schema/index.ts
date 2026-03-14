@@ -1,4 +1,5 @@
 export { accounts } from './accounts'
 export { folders } from './folders'
 export { messages } from './messages'
-export { aiConfig, labels, contacts } from './ai'
+export { aiConfig, aiBlacklist, labels, contacts, messageEmbeddings } from './ai'
+export { imageAllowlist } from './settings'

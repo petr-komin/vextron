@@ -15,6 +15,10 @@ export interface Account {
   smtpSecurity: 'tls' | 'starttls' | 'none'
   isActive: boolean
   color: string
+  /** Periodic sync interval in minutes. 0 = disabled (manual sync only). */
+  syncIntervalMinutes: number
+  /** Whether to automatically analyze new emails with AI after sync. */
+  autoAnalyze: boolean
   createdAt: string
 }
 
@@ -31,6 +35,10 @@ export interface AccountFormData {
   security: 'tls' | 'starttls' | 'none'
   smtpSecurity: 'tls' | 'starttls' | 'none'
   color: string
+  /** Periodic sync interval in minutes. 0 = disabled. */
+  syncIntervalMinutes: number
+  /** Whether to automatically analyze new emails with AI after sync. */
+  autoAnalyze: boolean
 }
 
 // ─── Folder types ────────────────────────────────────────────────────────────
@@ -101,6 +109,20 @@ export interface MessageListItem {
   aiPriority?: 'high' | 'medium' | 'low'
 }
 
+/** Extended list item for AI Overview — includes summary + account email for multi-account display */
+export interface AnalyzedMessageItem extends MessageListItem {
+  aiSummary: string
+  aiCategory: string
+  aiPriority: 'high' | 'medium' | 'low'
+  accountEmail?: string
+}
+
+/** Semantic search result — analyzed message with similarity score */
+export interface SemanticSearchResult extends AnalyzedMessageItem {
+  /** Cosine similarity score (0-1, higher = more similar) */
+  similarity: number
+}
+
 // ─── Attachment types ────────────────────────────────────────────────────────
 
 export interface Attachment {
@@ -113,7 +135,7 @@ export interface Attachment {
 
 // ─── AI types ────────────────────────────────────────────────────────────────
 
-export type AiProvider = 'openai' | 'anthropic' | 'ollama'
+export type AiProvider = 'together' | 'openai' | 'anthropic' | 'ollama'
 
 export interface AiConfig {
   id: number
@@ -130,6 +152,22 @@ export interface AiClassification {
   priority: 'high' | 'medium' | 'low'
   summary: string
   labels: string[]
+}
+
+export interface AiBatchResult {
+  total: number
+  analyzed: number
+  skipped: number
+  failed: number
+}
+
+export type AiBlacklistPatternType = 'domain' | 'address' | 'subject'
+
+export interface AiBlacklistRule {
+  id: number
+  pattern: string
+  patternType: AiBlacklistPatternType
+  createdAt: string
 }
 
 // ─── Filter types ────────────────────────────────────────────────────────────
@@ -178,6 +216,14 @@ export interface ImportProgress {
   error?: string
 }
 
+// ─── Settings types ──────────────────────────────────────────────────────────
+
+export interface ImageAllowlistEntry {
+  id: number
+  domain: string
+  createdAt: string
+}
+
 // ─── IPC Channel types ──────────────────────────────────────────────────────
 
 export interface IpcChannels {
@@ -202,6 +248,7 @@ export interface IpcChannels {
   'messages:setFlags': (messageId: number, flags: Partial<MessageFlags>) => Promise<void>
   'messages:move': (messageId: number, targetFolderId: number) => Promise<void>
   'messages:delete': (messageId: number) => Promise<void>
+  'messages:listAnalyzed': () => Promise<AnalyzedMessageItem[]>
 
   // Sync
   'sync:fullAccount': (accountId: number, inboxOnly?: boolean) => Promise<{ foldersCount: number; messagesCount: number }>
@@ -212,11 +259,23 @@ export interface IpcChannels {
   'import:run': (accountId: number, mboxFiles: MboxFileInfo[]) => Promise<{ totalImported: number; duplicatesSkipped: number; foldersCreated: number }>
 
   // AI
-  'ai:classify': (messageId: number) => Promise<AiClassification>
-  'ai:summarize': (messageId: number) => Promise<string>
-  'ai:search': (query: string, accountId?: number) => Promise<MessageListItem[]>
+  'ai:analyze': (messageId: number) => Promise<AiClassification>
+  'ai:analyzeBatch': (params: { folderId?: number; folderType?: FolderType; filters?: MessageFilters }) => Promise<AiBatchResult>
+  'ai:search': (query: string, accountId?: number) => Promise<SemanticSearchResult[]>
   'ai:getConfig': () => Promise<AiConfig | null>
   'ai:setConfig': (config: Omit<AiConfig, 'id'>) => Promise<AiConfig>
+
+  // AI Blacklist
+  'ai:blacklist:list': () => Promise<AiBlacklistRule[]>
+  'ai:blacklist:add': (pattern: string, patternType: AiBlacklistPatternType) => Promise<AiBlacklistRule>
+  'ai:blacklist:remove': (id: number) => Promise<void>
+  'ai:blacklist:check': (messageId: number) => Promise<boolean>
+
+  // Settings — Image Allowlist
+  'settings:imageAllowlist:list': () => Promise<ImageAllowlistEntry[]>
+  'settings:imageAllowlist:add': (domain: string) => Promise<void>
+  'settings:imageAllowlist:remove': (domain: string) => Promise<void>
+  'settings:imageAllowlist:check': (domain: string) => Promise<boolean>
 }
 
 // ─── Connection status ───────────────────────────────────────────────────────

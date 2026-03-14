@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 import { imapManager } from './services/imap/connection-manager'
+import { initSyncScheduler, stopAllSchedules } from './services/sync-scheduler'
 
 function createWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
@@ -53,6 +54,11 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  // Start periodic sync timers for accounts that have sync_interval_minutes > 0
+  initSyncScheduler().catch((err) =>
+    console.error('[App] Scheduler init failed:', err)
+  )
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -62,6 +68,8 @@ app.whenReady().then(() => {
 
 // Close all IMAP connections before quitting
 app.on('before-quit', async () => {
+  console.log('[App] Stopping sync schedulers...')
+  stopAllSchedules()
   console.log('[App] Closing all IMAP connections...')
   await imapManager.closeAll()
   console.log('[App] All IMAP connections closed.')

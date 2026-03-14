@@ -1,18 +1,93 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useMessagesStore } from '../../stores/messages'
-import { useFoldersStore, isUnifiedFolder } from '../../stores/folders'
-import type { MessageListItem, MessageFilters, SearchField } from '../../../shared/types'
+import { useFoldersStore, isUnifiedFolder, unifiedFolderType } from '../../stores/folders'
+import { api } from '../../services/api'
+import type { MessageListItem, MessageFilters, SearchField, FolderType } from '../../../shared/types'
 import ProgressSpinner from 'primevue/progressspinner'
 import SelectButton from 'primevue/selectbutton'
 import DatePicker from 'primevue/datepicker'
 import InputText from 'primevue/inputtext'
 import Checkbox from 'primevue/checkbox'
+import Button from 'primevue/button'
+import ContextMenu from 'primevue/contextmenu'
+import { useToast } from 'primevue/usetoast'
 
 const messagesStore = useMessagesStore()
 const foldersStore = useFoldersStore()
+const toast = useToast()
 const syncing = ref(false)
 const listContainer = ref<HTMLElement | null>(null)
+
+// ─── Context menu ────────────────────────────────────────────────────────────
+const contextMenu = ref()
+const contextMessage = ref<MessageListItem | null>(null)
+
+const contextMenuItems = [
+  {
+    label: 'Block sender from AI',
+    icon: 'pi pi-ban',
+    command: () => blockSenderFromAi()
+  }
+]
+
+function onMessageContextMenu(event: MouseEvent, msg: MessageListItem): void {
+  contextMessage.value = msg
+  contextMenu.value.show(event)
+}
+
+async function blockSenderFromAi(): Promise<void> {
+  const msg = contextMessage.value
+  if (!msg?.from?.address) return
+
+  const addr = msg.from.address
+  const atIndex = addr.lastIndexOf('@')
+  const domain = atIndex >= 0 ? addr.substring(atIndex + 1).toLowerCase() : addr.toLowerCase()
+
+  try {
+    await api.ai.blacklist.add(domain, 'domain')
+    toast.add({
+      severity: 'info',
+      summary: 'Sender Blocked from AI',
+      detail: `All emails from ${domain} will be excluded from AI analysis.`,
+      life: 4000
+    })
+  } catch (err) {
+    console.error('[MessageList] Failed to add blacklist rule:', err)
+    toast.add({
+      severity: 'error',
+      summary: 'Failed to Block Sender',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+      life: 5000
+    })
+  }
+}
+
+/**
+ * Manual sync button handler — triggers IMAP sync for the current folder
+ * (or full account sync for unified folders), then refreshes the message list.
+ */
+async function manualSync(): Promise<void> {
+  const folderId = foldersStore.activeFolderId
+  if (!folderId || syncing.value) return
+
+  syncing.value = true
+  try {
+    if (isUnifiedFolder(folderId)) {
+      // For unified views, we don't have a single folderId to sync.
+      // Could sync all accounts, but that's heavy. For now, just skip.
+      // The background periodic sync will handle this.
+      console.log('[MessageList] Manual sync not available for unified folders')
+    } else {
+      await window.electronAPI.messages.sync(folderId)
+      await messagesStore.fetchMessages(folderId)
+    }
+  } catch (err) {
+    console.warn('[MessageList] Manual sync failed:', err instanceof Error ? err.message : err)
+  } finally {
+    syncing.value = false
+  }
+}
 
 // Filter state
 const readFilter = ref<string>('all')
@@ -90,6 +165,107 @@ function clearDateRange(): void {
   applyFilters()
 }
 
+// ─── Batch AI analysis ───────────────────────────────────────────────────────
+const batchAnalyzing = ref(false)
+
+/** Whether the AI batch analyze button should be visible */
+const showBatchAiButton = computed(() => {
+  // Show when there are messages loaded and some filter/search is active
+  return messagesStore.totalCount > 0 && foldersStore.activeFolderId !== null
+})
+
+async function batchAnalyzeAll(): Promise<void> {
+  const folderId = foldersStore.activeFolderId
+  if (!folderId || batchAnalyzing.value) return
+
+  batchAnalyzing.value = true
+  try {
+    // Build the current filter state
+    const filters = getCurrentFilters()
+
+    // Build params — distinguish unified vs regular folder
+    const params: { folderId?: number; folderType?: FolderType; filters?: MessageFilters } = {}
+    if (isUnifiedFolder(folderId)) {
+      params.folderType = unifiedFolderType(folderId)
+    } else {
+      params.folderId = folderId
+    }
+    if (filters) {
+      params.filters = filters
+    }
+
+    const result = await api.ai.analyzeBatch(params)
+
+    if (result.analyzed > 0) {
+      toast.add({
+        severity: 'success',
+        summary: 'AI Analysis Complete',
+        detail: `Analyzed ${result.analyzed} message(s)` +
+          (result.skipped > 0 ? `, ${result.skipped} skipped` : '') +
+          (result.failed > 0 ? `, ${result.failed} failed` : ''),
+        life: 5000
+      })
+      // Refresh message list to show new AI badges
+      await messagesStore.fetchMessages(folderId)
+    } else if (result.skipped > 0 && result.failed === 0) {
+      toast.add({
+        severity: 'info',
+        summary: 'Nothing New to Analyze',
+        detail: `All ${result.skipped} message(s) were already analyzed or blacklisted.`,
+        life: 4000
+      })
+    } else if (result.total === 0) {
+      toast.add({
+        severity: 'info',
+        summary: 'No Messages',
+        detail: 'No messages match the current filters.',
+        life: 3000
+      })
+    } else {
+      toast.add({
+        severity: 'warn',
+        summary: 'AI Analysis Issues',
+        detail: `${result.failed} message(s) failed, ${result.skipped} skipped.`,
+        life: 5000
+      })
+    }
+  } catch (err) {
+    console.error('[MessageList] Batch AI analysis failed:', err)
+    toast.add({
+      severity: 'error',
+      summary: 'AI Analysis Failed',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+      life: 5000
+    })
+  } finally {
+    batchAnalyzing.value = false
+  }
+}
+
+/** Build the current MessageFilters from UI state (reuses same logic as applyFilters). */
+function getCurrentFilters(): MessageFilters | undefined {
+  const filters: MessageFilters = {}
+  if (readFilter.value === 'unread') {
+    filters.unreadOnly = true
+  }
+  if (dateRange.value && dateRange.value.length >= 1 && dateRange.value[0]) {
+    filters.dateFrom = dateRange.value[0].toISOString()
+    if (dateRange.value.length >= 2 && dateRange.value[1]) {
+      filters.dateTo = dateRange.value[1].toISOString()
+    }
+  }
+  if (searchQuery.value.trim()) {
+    filters.searchQuery = searchQuery.value.trim()
+    const fields = getSelectedSearchFields()
+    if (fields.length < 3) {
+      filters.searchFields = fields
+    }
+  }
+  // Return undefined if no filters are set
+  if (Object.keys(filters).length === 0) return undefined
+  return filters
+}
+
 // Only apply filters when user changes the toggle, not during programmatic resets
 watch(readFilter, () => {
   if (suppressFilterWatch) return
@@ -154,7 +330,7 @@ function formatDate(dateStr: string): string {
   if (isToday) {
     return date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
   }
-  return date.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' })
+  return date.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function priorityClass(priority?: string): string {
@@ -179,10 +355,22 @@ function onScroll(): void {
     <!-- Folder header -->
     <div class="list-header vx-no-select" v-if="foldersStore.activeFolderId">
       <span class="list-title">{{ foldersStore.activeFolderName }}</span>
-      <span class="list-count">
-        <i v-if="syncing" class="pi pi-spin pi-sync" style="font-size: 11px; margin-right: 4px" />
-        {{ messagesStore.messageList.length }} / {{ messagesStore.totalCount }}
-      </span>
+      <div class="list-header-right">
+        <Button
+          :icon="syncing ? 'pi pi-spin pi-sync' : 'pi pi-sync'"
+          severity="secondary"
+          text
+          rounded
+          size="small"
+          :disabled="syncing || isUnifiedFolder(foldersStore.activeFolderId)"
+          v-tooltip.bottom="'Sync now'"
+          @click="manualSync"
+          class="sync-btn"
+        />
+        <span class="list-count">
+          {{ messagesStore.messageList.length }} / {{ messagesStore.totalCount }}
+        </span>
+      </div>
     </div>
 
     <!-- Filters toolbar -->
@@ -246,6 +434,16 @@ function onScroll(): void {
         >
           <i class="pi pi-sliders-h" />
         </button>
+        <button
+          v-if="showBatchAiButton"
+          class="search-ai-batch"
+          :class="{ analyzing: batchAnalyzing }"
+          :disabled="batchAnalyzing"
+          @click="batchAnalyzeAll"
+          :title="batchAnalyzing ? 'Analyzing...' : `Analyze all ${messagesStore.totalCount} message(s) with AI`"
+        >
+          <i :class="batchAnalyzing ? 'pi pi-spin pi-spinner' : 'pi pi-sparkles'" />
+        </button>
       </div>
       <div v-if="showSearchFields" class="search-fields">
         <label class="search-field-option">
@@ -288,6 +486,7 @@ function onScroll(): void {
           flagged: msg.flags.flagged
         }"
         @click="selectMessage(msg)"
+        @contextmenu.prevent="onMessageContextMenu($event, msg)"
       >
         <!-- Priority indicator -->
         <div
@@ -342,6 +541,9 @@ function onScroll(): void {
       <i class="pi pi-arrow-left" style="font-size: 1.5rem; margin-bottom: 8px" />
       <p>Select a folder</p>
     </div>
+
+    <!-- Right-click context menu -->
+    <ContextMenu ref="contextMenu" :model="contextMenuItems" />
   </div>
 </template>
 
@@ -369,6 +571,17 @@ function onScroll(): void {
 .list-count {
   font-size: 11px;
   color: var(--vx-text-muted);
+}
+
+.list-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-btn {
+  width: 28px !important;
+  height: 28px !important;
 }
 
 /* Filters toolbar */
@@ -486,6 +699,37 @@ function onScroll(): void {
 
 .search-fields-toggle.active {
   color: var(--vx-accent);
+}
+
+.search-ai-batch {
+  background: none;
+  border: none;
+  color: var(--vx-text-muted);
+  cursor: pointer;
+  padding: 3px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--vx-border);
+  padding-left: 6px;
+  margin-left: 2px;
+}
+
+.search-ai-batch:hover:not(:disabled) {
+  color: var(--vx-accent);
+  background: var(--vx-bg-hover);
+}
+
+.search-ai-batch.analyzing {
+  color: var(--vx-accent);
+  cursor: wait;
+}
+
+.search-ai-batch:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .search-fields {

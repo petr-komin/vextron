@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AccountFormData, MessageFlags, MessageFilters, FolderType } from '../shared/types'
+import type {
+  AccountFormData,
+  MessageFlags,
+  MessageFilters,
+  FolderType,
+  AiBlacklistPatternType
+} from '../shared/types'
 
 /**
  * Strip Vue/Pinia reactive proxies by converting to plain JSON.
@@ -51,7 +57,8 @@ const api = {
       ipcRenderer.invoke('messages:setFlags', messageId, toRaw(flags)),
     move: (messageId: number, targetFolderId: number) =>
       ipcRenderer.invoke('messages:move', messageId, targetFolderId),
-    delete: (messageId: number) => ipcRenderer.invoke('messages:delete', messageId)
+    delete: (messageId: number) => ipcRenderer.invoke('messages:delete', messageId),
+    listAnalyzed: () => ipcRenderer.invoke('messages:listAnalyzed')
   },
 
   // ── Sync ────────────────────────────────────────────────────────────────
@@ -62,12 +69,20 @@ const api = {
 
   // ── AI ──────────────────────────────────────────────────────────────────
   ai: {
-    classify: (messageId: number) => ipcRenderer.invoke('ai:classify', messageId),
-    summarize: (messageId: number) => ipcRenderer.invoke('ai:summarize', messageId),
+    analyze: (messageId: number) => ipcRenderer.invoke('ai:analyze', messageId),
+    analyzeBatch: (params: { folderId?: number; folderType?: FolderType; filters?: MessageFilters }) =>
+      ipcRenderer.invoke('ai:analyzeBatch', toRaw(params)),
     search: (query: string, accountId?: number) =>
       ipcRenderer.invoke('ai:search', query, accountId),
     getConfig: () => ipcRenderer.invoke('ai:getConfig'),
-    setConfig: (config: unknown) => ipcRenderer.invoke('ai:setConfig', toRaw(config))
+    setConfig: (config: unknown) => ipcRenderer.invoke('ai:setConfig', toRaw(config)),
+    blacklist: {
+      list: () => ipcRenderer.invoke('ai:blacklist:list'),
+      add: (pattern: string, patternType: AiBlacklistPatternType) =>
+        ipcRenderer.invoke('ai:blacklist:add', pattern, patternType),
+      remove: (id: number) => ipcRenderer.invoke('ai:blacklist:remove', id),
+      check: (messageId: number) => ipcRenderer.invoke('ai:blacklist:check', messageId)
+    }
   },
 
   // ── Import ──────────────────────────────────────────────────────────────
@@ -76,6 +91,16 @@ const api = {
     defaultPaths: () => ipcRenderer.invoke('import:defaultPaths'),
     run: (accountId: number, mboxFiles: unknown[]) =>
       ipcRenderer.invoke('import:run', accountId, toRaw(mboxFiles))
+  },
+
+  // ── Settings ───────────────────────────────────────────────────────────
+  settings: {
+    imageAllowlist: {
+      list: () => ipcRenderer.invoke('settings:imageAllowlist:list'),
+      add: (domain: string) => ipcRenderer.invoke('settings:imageAllowlist:add', domain),
+      remove: (domain: string) => ipcRenderer.invoke('settings:imageAllowlist:remove', domain),
+      check: (domain: string) => ipcRenderer.invoke('settings:imageAllowlist:check', domain)
+    }
   },
 
   // ── Events (main → renderer) ───────────────────────────────────────────

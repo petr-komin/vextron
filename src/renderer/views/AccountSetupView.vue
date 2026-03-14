@@ -40,7 +40,8 @@ const form = ref<AccountFormData>({
   authType: 'password',
   security: 'tls',
   smtpSecurity: 'starttls',
-  color: '#7c6cf0'
+  color: '#7c6cf0',
+  syncIntervalMinutes: 0
 })
 
 const securityOptions = [

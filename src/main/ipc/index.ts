@@ -2,6 +2,8 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { accountsHandlers } from './accounts'
 import { foldersHandlers } from './folders'
 import { messagesHandlers } from './messages'
+import { settingsHandlers } from './settings'
+import { aiHandlers } from './ai'
 import { registerSyncHandlers } from './sync'
 import { registerImportHandlers } from './import'
 
@@ -48,7 +50,9 @@ export function registerIpcHandlers(): void {
   const allHandlers: HandlerMap = {
     ...accountsHandlers,
     ...foldersHandlers,
-    ...messagesHandlers
+    ...messagesHandlers,
+    ...settingsHandlers,
+    ...aiHandlers
   } as HandlerMap
 
   for (const [channel, handler] of Object.entries(allHandlers)) {

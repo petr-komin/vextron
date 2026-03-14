@@ -111,6 +111,13 @@ export async function syncAccountFolders(
   return db.select().from(folders).where(eq(folders.accountId, accountId))
 }
 
+export interface SyncFolderResult {
+  /** Number of new messages detected (before dedup at DB level) */
+  count: number
+  /** DB IDs of actually inserted messages */
+  newMessageIds: number[]
+}
+
 /**
  * Sync messages for a specific folder from IMAP.
  * Uses IMAP UIDs to perform incremental sync — only fetches new messages.
@@ -120,14 +127,14 @@ export async function syncFolderMessages(
   accountId: number,
   folderId: number,
   onProgress?: ProgressCallback
-): Promise<number> {
+): Promise<SyncFolderResult> {
   const db = getDb()
 
   const [folder] = await db.select().from(folders).where(eq(folders.id, folderId))
   if (!folder) throw new Error(`Folder ${folderId} not found`)
 
   return imapManager.withClient(accountId, async (client) => {
-    let synced = 0
+    const newMessageIds: number[] = []
 
     const lock = await client.getMailboxLock(folder.path)
     try {
@@ -146,20 +153,33 @@ export async function syncFolderMessages(
       }).where(eq(folders.id, folderId))
 
       if (totalMessages === 0) {
-        return 0
+        return { count: 0, newMessageIds: [] }
       }
 
-      // Find the highest UID we already have for incremental sync
-      const existingMsgs = await db
+      // Pre-load existing dedup hashes for this account to skip already-imported messages.
+      // This is the correct dedup mechanism — UID-based skip is unreliable because
+      // mbox-imported messages have synthetic UIDs that can collide with real IMAP UIDs.
+      const existingHashRows = await db
+        .select({ dedupHash: messages.dedupHash })
+        .from(messages)
+        .where(eq(messages.accountId, accountId))
+      const existingHashes = new Set(existingHashRows.map((r) => r.dedupHash))
+
+      // Also load UIDs specifically from this folder for the "initial sync" range optimization.
+      // Count only messages that were synced from IMAP (have UIDs within IMAP's uidNext range),
+      // not mbox-imported messages with synthetic UIDs that exceed uidNext.
+      const imapUidNext = mailboxStatus.uidNext ? Number(mailboxStatus.uidNext) : Infinity
+      const existingImapMsgs = await db
         .select({ uid: messages.uid })
         .from(messages)
         .where(and(eq(messages.folderId, folderId), eq(messages.accountId, accountId)))
-
-      const existingUids = new Set(existingMsgs.map((m) => m.uid))
+      const existingImapUids = new Set(
+        existingImapMsgs.map((m) => m.uid).filter((uid) => uid < imapUidNext)
+      )
 
       // Fetch envelopes for all messages (UIDs).
-      // For initial sync, limit to last 1000 messages by sequence number.
-      const fetchRange = existingUids.size === 0 && totalMessages > 1000
+      // For initial IMAP sync (no real IMAP UIDs yet), limit to last 1000 messages by sequence number.
+      const fetchRange = existingImapUids.size === 0 && totalMessages > 1000
         ? `${Math.max(1, totalMessages - 999)}:*`
         : '1:*'
 
@@ -184,25 +204,26 @@ export async function syncFolderMessages(
           })
         }
 
-        // Skip if we already have this UID
-        if (existingUids.has(msg.uid)) continue
-
+        // Skip if we already have this message (by dedup hash, not UID)
         const envelope = msg.envelope
         if (!envelope) continue
 
         const fromAddr = envelope.from?.[0]
+        const dedupHash = computeDedupHash({
+          messageId: envelope.messageId,
+          fromAddress: fromAddr?.address || '',
+          date: envelope.date ? new Date(envelope.date) : null,
+          subject: envelope.subject || ''
+        })
+        if (existingHashes.has(dedupHash)) continue
+
         const flagSet = msg.flags ?? new Set<string>()
 
         messagesToInsert.push({
           accountId,
           folderId,
           messageId: envelope.messageId || null,
-          dedupHash: computeDedupHash({
-            messageId: envelope.messageId,
-            fromAddress: fromAddr?.address || '',
-            date: envelope.date ? new Date(envelope.date) : null,
-            subject: envelope.subject || ''
-          }),
+          dedupHash,
           uid: msg.uid,
           subject: envelope.subject || '(no subject)',
           fromAddress: fromAddr?.address || '',
@@ -229,20 +250,22 @@ export async function syncFolderMessages(
           aiSummary: null
         })
 
-        synced++
       }
 
       // Batch insert with dedup — ON CONFLICT DO NOTHING on (account_id, dedup_hash)
       // This prevents unique constraint violations when importing mbox + syncing same account
+      // .returning() only returns actually inserted rows (not conflicting ones)
       if (messagesToInsert.length > 0) {
         for (let i = 0; i < messagesToInsert.length; i += 100) {
           const batch = messagesToInsert.slice(i, i + 100)
-          await db
+          const inserted = await db
             .insert(messages)
             .values(batch)
             .onConflictDoNothing({
               target: [messages.accountId, messages.dedupHash]
             })
+            .returning({ id: messages.id })
+          newMessageIds.push(...inserted.map((r) => r.id))
         }
       }
 
@@ -264,7 +287,7 @@ export async function syncFolderMessages(
       lock.release()
     }
 
-    return synced
+    return { count: newMessageIds.length, newMessageIds }
   })
 }
 
@@ -335,7 +358,7 @@ export async function fullAccountSync(
   accountId: number,
   onProgress?: ProgressCallback,
   inboxOnly: boolean = true
-): Promise<{ foldersCount: number; messagesCount: number }> {
+): Promise<{ foldersCount: number; messagesCount: number; newMessageIds: number[] }> {
   // Step 1: Sync folders
   if (onProgress) {
     onProgress({ accountId, phase: 'folders', current: 0, total: 1 })
@@ -349,6 +372,7 @@ export async function fullAccountSync(
 
   // Step 2: Sync messages
   let totalSynced = 0
+  const allNewMessageIds: number[] = []
   const foldersToSync = inboxOnly
     ? syncedFolders.filter((f) => f.type === 'inbox')
     : syncedFolders.filter((f) => ['inbox', 'sent', 'drafts'].includes(f.type))
@@ -356,12 +380,13 @@ export async function fullAccountSync(
   for (let i = 0; i < foldersToSync.length; i++) {
     const folder = foldersToSync[i]
     try {
-      const count = await syncFolderMessages(accountId, folder.id, onProgress)
-      totalSynced += count
+      const result = await syncFolderMessages(accountId, folder.id, onProgress)
+      totalSynced += result.count
+      allNewMessageIds.push(...result.newMessageIds)
     } catch (error) {
       console.error(`[Sync] Error syncing folder ${folder.name}:`, error)
     }
   }
 
-  return { foldersCount: syncedFolders.length, messagesCount: totalSynced }
+  return { foldersCount: syncedFolders.length, messagesCount: totalSynced, newMessageIds: allNewMessageIds }
 }

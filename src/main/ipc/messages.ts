@@ -1,13 +1,14 @@
 import type { IpcMainInvokeEvent } from 'electron'
-import type { Message, MessageListItem, MessageFlags, EmailAddress, MessageFilters, SearchField, FolderType } from '../../shared/types'
+import type { Message, MessageListItem, MessageFlags, EmailAddress, MessageFilters, SearchField, FolderType, AnalyzedMessageItem } from '../../shared/types'
 import { getDb } from '../services/db/connection'
 import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
-import { eq, desc, and, or, sql, ilike, inArray, type SQL } from 'drizzle-orm'
+import { accounts } from '../services/db/schema/accounts'
+import { eq, desc, and, or, sql, ilike, inArray, isNotNull, type SQL } from 'drizzle-orm'
 import { syncFolderMessages, fetchMessageBody } from '../services/imap/sync'
 
 /** Build shared WHERE conditions from filters (date, unread, search). */
-function buildCommonConditions(filters?: MessageFilters): SQL[] {
+export function buildCommonConditions(filters?: MessageFilters): SQL[] {
   const conditions: SQL[] = []
 
   if (filters?.unreadOnly) {
@@ -244,8 +245,8 @@ export const messagesHandlers = {
     if (!folder) throw new Error(`Folder ${folderId} not found`)
 
     console.log(`[Messages] Starting sync for folder: ${folder.name} (id=${folderId})`)
-    const synced = await syncFolderMessages(folder.accountId, folderId)
-    console.log(`[Messages] Synced ${synced} new messages for folder: ${folder.name}`)
+    const result = await syncFolderMessages(folder.accountId, folderId)
+    console.log(`[Messages] Synced ${result.count} new messages for folder: ${folder.name}`)
   },
 
   'messages:move': async (
@@ -255,5 +256,42 @@ export const messagesHandlers = {
   ): Promise<void> => {
     const db = getDb()
     await db.update(messages).set({ folderId: targetFolderId }).where(eq(messages.id, messageId))
+  },
+
+  /**
+   * List all AI-analyzed messages (those with ai_summary IS NOT NULL).
+   * Returns messages sorted by date descending, with account email for multi-account display.
+   */
+  'messages:listAnalyzed': async (
+    _event: IpcMainInvokeEvent
+  ): Promise<AnalyzedMessageItem[]> => {
+    const db = getDb()
+
+    const rows = await db
+      .select({
+        msg: messages,
+        accountEmail: accounts.email
+      })
+      .from(messages)
+      .innerJoin(accounts, eq(messages.accountId, accounts.id))
+      .where(isNotNull(messages.aiSummary))
+      .orderBy(desc(messages.date))
+
+    return rows.map(({ msg, accountEmail }) => ({
+      id: msg.id,
+      accountId: msg.accountId,
+      folderId: msg.folderId,
+      uid: msg.uid,
+      subject: msg.subject,
+      from: { name: msg.fromName, address: msg.fromAddress },
+      date: msg.date?.toISOString() ?? '',
+      flags: msg.flags as MessageFlags,
+      hasAttachments: msg.hasAttachments,
+      preview: msg.preview,
+      aiCategory: msg.aiCategory!,
+      aiPriority: msg.aiPriority as 'high' | 'medium' | 'low',
+      aiSummary: msg.aiSummary!,
+      accountEmail
+    }))
   }
 }

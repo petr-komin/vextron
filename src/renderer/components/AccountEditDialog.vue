@@ -12,6 +12,7 @@ import InputNumber from 'primevue/inputnumber'
 import Button from 'primevue/button'
 import FloatLabel from 'primevue/floatlabel'
 import Message from 'primevue/message'
+import ToggleSwitch from 'primevue/toggleswitch'
 import ConfirmDialog from 'primevue/confirmdialog'
 import { useConfirm } from 'primevue/useconfirm'
 
@@ -45,7 +46,9 @@ const form = ref<AccountFormData>({
   authType: 'password',
   security: 'tls',
   smtpSecurity: 'starttls',
-  color: '#7c6cf0'
+  color: '#7c6cf0',
+  syncIntervalMinutes: 0,
+  autoAnalyze: false
 })
 
 const securityOptions = [
@@ -57,6 +60,15 @@ const securityOptions = [
 const colorOptions = [
   '#7c6cf0', '#4A90D9', '#2ecc71', '#e74c3c',
   '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'
+]
+
+const syncIntervalOptions = [
+  { label: 'Disabled (manual only)', value: 0 },
+  { label: 'Every 5 minutes', value: 5 },
+  { label: 'Every 10 minutes', value: 10 },
+  { label: 'Every 15 minutes', value: 15 },
+  { label: 'Every 30 minutes', value: 30 },
+  { label: 'Every 60 minutes', value: 60 }
 ]
 
 // Populate form when account changes
@@ -76,7 +88,9 @@ watch(
         authType: account.authType,
         security: account.security,
         smtpSecurity: account.smtpSecurity,
-        color: account.color
+        color: account.color,
+        syncIntervalMinutes: account.syncIntervalMinutes ?? 0,
+        autoAnalyze: account.autoAnalyze ?? false
       }
       testResult.value = null
     }
@@ -228,6 +242,29 @@ function close(): void {
               @click="form.color = color"
             />
           </div>
+        </div>
+
+        <!-- Sync interval -->
+        <div class="form-field">
+          <label class="field-label">Automatic Sync</label>
+          <Select
+            v-model="form.syncIntervalMinutes"
+            :options="syncIntervalOptions"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+          <p class="sync-hint">How often to check for new emails via IMAP. Set to "Disabled" for manual sync only.</p>
+        </div>
+
+        <!-- Auto AI analysis -->
+        <div class="form-field">
+          <label class="field-label">AI Auto-Analysis</label>
+          <div class="toggle-row">
+            <ToggleSwitch v-model="form.autoAnalyze" />
+            <span class="toggle-label">Automatically analyze new emails with AI after sync</span>
+          </div>
+          <p class="sync-hint">When enabled, new emails will be summarized and classified by AI after each sync. Requires AI to be configured in Settings.</p>
         </div>
       </div>
 
@@ -385,6 +422,7 @@ function close(): void {
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 12px;
+  padding-top: 8px;
 }
 
 .form-field {
@@ -438,6 +476,23 @@ function close(): void {
   font-size: 11px;
   color: var(--vx-text-muted);
   margin-top: -4px;
+}
+
+.sync-hint {
+  font-size: 11px;
+  color: var(--vx-text-muted);
+  margin-top: 4px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toggle-label {
+  font-size: 13px;
+  color: var(--vx-text-primary);
 }
 
 .dialog-actions {

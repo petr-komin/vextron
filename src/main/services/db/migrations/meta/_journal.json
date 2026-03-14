@@ -22,6 +22,41 @@
       "when": 1773311209953,
       "tag": "0002_overjoyed_namor",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1773320050781,
+      "tag": "0003_fancy_the_twelve",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1773430660535,
+      "tag": "0004_tense_dust",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1773469662628,
+      "tag": "0005_cuddly_talkback",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1773480693874,
+      "tag": "0006_shallow_warhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1773488416113,
+      "tag": "0007_bizarre_colonel_america",
+      "breakpoints": true
     }
   ]
 }

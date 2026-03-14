@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
-import { ref } from 'vue'
+import SelectButton from 'primevue/selectbutton'
+import { ref, inject, type Ref } from 'vue'
 import ThunderbirdImportDialog from '../ThunderbirdImportDialog.vue'
 
 const router = useRouter()
 const importDialogVisible = ref(false)
+
+/** View mode injected from MailView */
+const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
+
+const viewModeOptions = [
+  { label: 'Mail', value: 'mail', icon: 'pi pi-envelope' },
+  { label: 'AI Overview', value: 'ai', icon: 'pi pi-sparkles' }
+]
 
 function onImported() {
   // Could refresh folder lists, etc.
@@ -18,7 +27,21 @@ function onImported() {
       <span class="header-logo">Vextron</span>
     </div>
 
-    <div class="header-center" />
+    <div class="header-center">
+      <SelectButton
+        v-model="viewMode"
+        :options="viewModeOptions"
+        optionLabel="label"
+        optionValue="value"
+        :allowEmpty="false"
+        class="view-mode-toggle"
+      >
+        <template #option="{ option }">
+          <i :class="option.icon" style="margin-right: 4px" />
+          <span>{{ option.label }}</span>
+        </template>
+      </SelectButton>
+    </div>
 
     <div class="header-right">
       <Button
@@ -83,6 +106,18 @@ function onImported() {
 
 .header-center {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-mode-toggle :deep(.p-selectbutton) {
+  font-size: 12px;
+}
+
+.view-mode-toggle :deep(.p-togglebutton) {
+  padding: 4px 12px;
+  font-size: 12px;
 }
 
 .header-right {

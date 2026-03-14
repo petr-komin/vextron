@@ -14,7 +14,13 @@ import type {
   MessageFlags,
   MessageFilters,
   AiClassification,
-  AiConfig
+  AiBatchResult,
+  AiConfig,
+  AiBlacklistRule,
+  AiBlacklistPatternType,
+  ImageAllowlistEntry,
+  AnalyzedMessageItem,
+  SemanticSearchResult
 } from '../../shared/types'
 
 export interface MailApi {
@@ -39,6 +45,7 @@ export interface MailApi {
     setFlags(messageId: number, flags: Partial<MessageFlags>): Promise<void>
     move(messageId: number, targetFolderId: number): Promise<void>
     delete(messageId: number): Promise<void>
+    listAnalyzed(): Promise<AnalyzedMessageItem[]>
   }
   sync: {
     fullAccount(accountId: number, inboxOnly?: boolean): Promise<{ foldersCount: number; messagesCount: number }>
@@ -49,11 +56,25 @@ export interface MailApi {
     run(accountId: number, mboxFiles: unknown[]): Promise<{ totalImported: number; duplicatesSkipped: number; foldersCreated: number }>
   }
   ai: {
-    classify(messageId: number): Promise<AiClassification>
-    summarize(messageId: number): Promise<string>
-    search(query: string, accountId?: number): Promise<MessageListItem[]>
+    analyze(messageId: number): Promise<AiClassification>
+    analyzeBatch(params: { folderId?: number; folderType?: FolderType; filters?: MessageFilters }): Promise<AiBatchResult>
+    search(query: string, accountId?: number): Promise<SemanticSearchResult[]>
     getConfig(): Promise<AiConfig | null>
     setConfig(config: Omit<AiConfig, 'id'>): Promise<AiConfig>
+    blacklist: {
+      list(): Promise<AiBlacklistRule[]>
+      add(pattern: string, patternType: AiBlacklistPatternType): Promise<AiBlacklistRule>
+      remove(id: number): Promise<void>
+      check(messageId: number): Promise<boolean>
+    }
+  }
+  settings: {
+    imageAllowlist: {
+      list(): Promise<ImageAllowlistEntry[]>
+      add(domain: string): Promise<void>
+      remove(domain: string): Promise<void>
+      check(domain: string): Promise<boolean>
+    }
   }
 }
 
@@ -69,7 +90,8 @@ function createElectronApi(): MailApi {
     messages: api.messages,
     sync: api.sync,
     import: api.import,
-    ai: api.ai
+    ai: api.ai,
+    settings: api.settings
   } as MailApi
 }
 
@@ -87,3 +109,4 @@ export const messagesApi = isElectron() ? window.electronAPI.messages : null
 export const syncApi = isElectron() ? window.electronAPI.sync : null
 export const importApi = isElectron() ? window.electronAPI.import : null
 export const aiApi = isElectron() ? window.electronAPI.ai : null
+export const settingsApi = isElectron() ? window.electronAPI.settings : null

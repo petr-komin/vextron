@@ -4,6 +4,7 @@ import { getDb } from '../services/db/connection'
 import { accounts } from '../services/db/schema/accounts'
 import { eq } from 'drizzle-orm'
 import { imapManager } from '../services/imap/connection-manager'
+import { updateAccountSchedule, removeAccountSchedule } from '../services/sync-scheduler'
 
 export const accountsHandlers = {
   'accounts:list': async (_event: IpcMainInvokeEvent): Promise<Account[]> => {
@@ -32,9 +33,12 @@ export const accountsHandlers = {
         security: data.security,
         smtpSecurity: data.smtpSecurity,
         isActive: true,
-        color: data.color
+        color: data.color,
+        syncIntervalMinutes: data.syncIntervalMinutes ?? 0,
+        autoAnalyze: data.autoAnalyze ?? false
       })
       .returning()
+    updateAccountSchedule(row.id, data.syncIntervalMinutes ?? 0)
     return mapAccountRow(row)
   },
 
@@ -57,16 +61,24 @@ export const accountsHandlers = {
     if (data.security !== undefined) updateData.security = data.security
     if (data.smtpSecurity !== undefined) updateData.smtpSecurity = data.smtpSecurity
     if (data.color !== undefined) updateData.color = data.color
+    if (data.syncIntervalMinutes !== undefined) updateData.syncIntervalMinutes = data.syncIntervalMinutes
+    if (data.autoAnalyze !== undefined) updateData.autoAnalyze = data.autoAnalyze
 
     const [row] = await db
       .update(accounts)
       .set(updateData)
       .where(eq(accounts.id, id))
       .returning()
+    // Update sync schedule if interval changed
+    if (data.syncIntervalMinutes !== undefined) {
+      updateAccountSchedule(id, data.syncIntervalMinutes)
+    }
     return mapAccountRow(row)
   },
 
   'accounts:delete': async (_event: IpcMainInvokeEvent, id: number): Promise<void> => {
+    // Stop periodic sync timer before deleting
+    removeAccountSchedule(id)
     // Disconnect IMAP connection before deleting account data
     await imapManager.disconnect(id)
     const db = getDb()
@@ -115,6 +127,8 @@ function mapAccountRow(row: typeof accounts.$inferSelect): Account {
     smtpSecurity: row.smtpSecurity as Account['smtpSecurity'],
     isActive: row.isActive,
     color: row.color,
+    syncIntervalMinutes: row.syncIntervalMinutes,
+    autoAnalyze: row.autoAnalyze,
     createdAt: row.createdAt.toISOString()
     // password is intentionally omitted
   }

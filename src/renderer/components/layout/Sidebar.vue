@@ -150,12 +150,15 @@ watch(
         >
           <i :class="folderIcon(folder.type)" class="folder-icon" />
           <span class="folder-name vx-truncate">{{ folder.name }}</span>
-          <Badge
-            v-if="folder.unreadCount > 0"
-            :value="folder.unreadCount"
-            severity="info"
-            class="folder-badge"
-          />
+          <span class="folder-counts" v-if="folder.totalCount > 0">
+            <Badge
+              v-if="folder.unreadCount > 0"
+              :value="folder.unreadCount"
+              severity="info"
+              class="folder-badge"
+            />
+            <span class="folder-total">{{ folder.totalCount }}</span>
+          </span>
         </div>
       </div>
     </div>
@@ -318,6 +321,18 @@ watch(
 
 .folder-badge {
   font-size: 10px;
+}
+
+.folder-counts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.folder-total {
+  font-size: 10px;
+  color: var(--vx-text-muted);
 }
 
 .sidebar-empty {

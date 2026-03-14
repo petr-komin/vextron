@@ -1,0 +1,1 @@
+ALTER TABLE "accounts" ADD COLUMN "auto_analyze" boolean DEFAULT false NOT NULL;

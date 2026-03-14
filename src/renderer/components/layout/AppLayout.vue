@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { inject, ref, type Ref } from 'vue'
 import HeaderBar from './HeaderBar.vue'
 import Sidebar from './Sidebar.vue'
 import MessageList from './MessageList.vue'
 import MessageView from './MessageView.vue'
 import StatusBar from './StatusBar.vue'
+import AiOverview from '../ai/AiOverview.vue'
+
+/** View mode injected from MailView */
+const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
 
 defineProps<{
   showMessageView?: boolean
@@ -14,10 +19,16 @@ defineProps<{
   <div class="app-layout">
     <HeaderBar class="app-header" />
 
-    <div class="app-body">
+    <!-- Normal 3-panel mail view -->
+    <div v-if="viewMode === 'mail'" class="app-body">
       <Sidebar class="app-sidebar" />
       <MessageList class="app-message-list" />
       <MessageView class="app-message-view" />
+    </div>
+
+    <!-- AI Overview grouped view -->
+    <div v-else class="app-body app-body-ai">
+      <AiOverview class="app-ai-overview" />
     </div>
 
     <StatusBar class="app-statusbar" />
@@ -47,6 +58,10 @@ defineProps<{
   overflow: hidden;
 }
 
+.app-body-ai {
+  display: flex;
+}
+
 .app-sidebar {
   width: var(--vx-sidebar-width);
   min-width: 180px;
@@ -72,6 +87,12 @@ defineProps<{
 .app-message-view {
   flex: 1;
   min-width: 300px;
+  background: var(--vx-bg-primary);
+  overflow-y: auto;
+}
+
+.app-ai-overview {
+  flex: 1;
   background: var(--vx-bg-primary);
   overflow-y: auto;
 }
