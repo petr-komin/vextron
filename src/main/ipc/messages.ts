@@ -4,12 +4,16 @@ import { getDb } from '../services/db/connection'
 import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
 import { accounts } from '../services/db/schema/accounts'
-import { eq, desc, and, or, sql, ilike, inArray, isNotNull, type SQL } from 'drizzle-orm'
+import { eq, desc, and, or, sql, ilike, inArray, isNull, isNotNull, type SQL } from 'drizzle-orm'
 import { syncFolderMessages, fetchMessageBody } from '../services/imap/sync'
+import { imapManager } from '../services/imap/connection-manager'
 
 /** Build shared WHERE conditions from filters (date, unread, search). */
 export function buildCommonConditions(filters?: MessageFilters): SQL[] {
-  const conditions: SQL[] = []
+  const conditions: SQL[] = [
+    // Always exclude soft-deleted messages
+    isNull(messages.deletedAt)
+  ]
 
   if (filters?.unreadOnly) {
     conditions.push(sql`(${messages.flags}->>'seen')::text = 'false'`)
@@ -236,7 +240,66 @@ export const messagesHandlers = {
 
   'messages:delete': async (_event: IpcMainInvokeEvent, messageId: number): Promise<void> => {
     const db = getDb()
-    await db.delete(messages).where(eq(messages.id, messageId))
+
+    // Look up message details needed for IMAP move
+    const [msg] = await db
+      .select({
+        id: messages.id,
+        uid: messages.uid,
+        folderId: messages.folderId,
+        accountId: messages.accountId
+      })
+      .from(messages)
+      .where(eq(messages.id, messageId))
+    if (!msg) return
+
+    // Soft-delete immediately — hides from UI and prevents sync re-import
+    await db.update(messages)
+      .set({ deletedAt: new Date() })
+      .where(eq(messages.id, messageId))
+
+    // Attempt IMAP move to Trash (best-effort — will retry on next sync if it fails)
+    try {
+      // Find the Trash folder for this account
+      const [trashFolder] = await db
+        .select()
+        .from(folders)
+        .where(and(eq(folders.accountId, msg.accountId), eq(folders.type, 'trash')))
+
+      if (!trashFolder) {
+        console.warn('[delete] No Trash folder found for account', msg.accountId)
+        return
+      }
+
+      // Already in trash? Nothing to move on IMAP.
+      if (msg.folderId === trashFolder.id) return
+
+      // Get source folder IMAP path
+      const [srcFolder] = await db
+        .select({ path: folders.path })
+        .from(folders)
+        .where(eq(folders.id, msg.folderId))
+      if (!srcFolder) return
+
+      if (imapManager.isConnected(msg.accountId)) {
+        await imapManager.withClient(msg.accountId, async (client) => {
+          const lock = await client.getMailboxLock(srcFolder.path)
+          try {
+            await client.messageMove(msg.uid.toString(), trashFolder.path, { uid: true })
+          } finally {
+            lock.release()
+          }
+        })
+        // IMAP move succeeded — update local folderId to Trash
+        await db.update(messages)
+          .set({ folderId: trashFolder.id })
+          .where(eq(messages.id, messageId))
+      }
+    } catch (err) {
+      console.warn('[delete] IMAP move to Trash failed, will retry on next sync:', err)
+      // Soft-delete is already done — message hidden from UI.
+      // processPendingDeletes() in sync.ts will retry later.
+    }
   },
 
   'messages:sync': async (_event: IpcMainInvokeEvent, folderId: number): Promise<void> => {
@@ -274,7 +337,7 @@ export const messagesHandlers = {
       })
       .from(messages)
       .innerJoin(accounts, eq(messages.accountId, accounts.id))
-      .where(isNotNull(messages.aiSummary))
+      .where(and(isNotNull(messages.aiSummary), isNull(messages.deletedAt)))
       .orderBy(desc(messages.date))
 
     return rows.map(({ msg, accountEmail }) => ({

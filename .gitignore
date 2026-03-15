@@ -6,3 +6,6 @@ dist/
 .env.local
 .DS_Store
 NOTES.md
+web/
+build.sh
+web-deploy.sh

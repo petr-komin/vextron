@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAccountsStore } from '../../stores/accounts'
-import { useFoldersStore, UNIFIED_INBOX, UNIFIED_SENT, isUnifiedFolder } from '../../stores/folders'
+import { useFoldersStore, UNIFIED_INBOX, UNIFIED_SENT } from '../../stores/folders'
 import type { Account, Folder, FolderType } from '../../../shared/types'
 import Button from 'primevue/button'
 import Badge from 'primevue/badge'
@@ -57,24 +57,20 @@ watch(
   () => accountsStore.activeAccountId,
   async (accountId) => {
     if (!accountId) return
-    // Don't reset folder if a unified view is active
-    if (isUnifiedFolder(foldersStore.activeFolderId)) return
 
     // Always load from DB first (instant, works for imported accounts too)
     await foldersStore.fetchFolders(accountId)
 
-    // Auto-select inbox
-    const inbox = foldersStore.getInbox(accountId)
-    if (inbox && !foldersStore.activeFolderId) {
-      foldersStore.setActiveFolder(inbox.id)
+    // Auto-select Unified Inbox on startup (but don't override if a folder is already active)
+    if (!foldersStore.activeFolderId) {
+      foldersStore.setActiveFolder(UNIFIED_INBOX)
     }
 
     // Background IMAP sync — fire-and-forget, refresh folders if it succeeds
     foldersStore.syncFolders(accountId).then(() => {
-      // Re-select inbox if nothing was selected yet
-      const inboxAfterSync = foldersStore.getInbox(accountId)
-      if (inboxAfterSync && !foldersStore.activeFolderId) {
-        foldersStore.setActiveFolder(inboxAfterSync.id)
+      // Re-select Unified Inbox if nothing was selected yet
+      if (!foldersStore.activeFolderId) {
+        foldersStore.setActiveFolder(UNIFIED_INBOX)
       }
     }).catch((err) => {
       // IMAP unavailable — that's fine, we already have DB data

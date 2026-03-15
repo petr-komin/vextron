@@ -4,6 +4,7 @@ import { foldersHandlers } from './folders'
 import { messagesHandlers } from './messages'
 import { settingsHandlers } from './settings'
 import { aiHandlers } from './ai'
+import { mailHandlers } from './mail'
 import { registerSyncHandlers } from './sync'
 import { registerImportHandlers } from './import'
 
@@ -52,7 +53,8 @@ export function registerIpcHandlers(): void {
     ...foldersHandlers,
     ...messagesHandlers,
     ...settingsHandlers,
-    ...aiHandlers
+    ...aiHandlers,
+    ...mailHandlers
   } as HandlerMap
 
   for (const [channel, handler] of Object.entries(allHandlers)) {

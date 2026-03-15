@@ -54,7 +54,11 @@ export const messages = pgTable('messages', {
   aiPriority: varchar('ai_priority', { length: 10 }),
   aiSummary: text('ai_summary'),
 
-  createdAt: timestamp('created_at').notNull().defaultNow()
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+
+  /** Soft-delete timestamp. Non-null means the user deleted this message locally.
+   *  Used to hide from UI and as a retry queue for IMAP trash-move. */
+  deletedAt: timestamp('deleted_at')
 }, (table) => [
   // Global dedup per account — first import wins, duplicates in other folders are skipped
   uniqueIndex('messages_account_dedup_hash_idx')

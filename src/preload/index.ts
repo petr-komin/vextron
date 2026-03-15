@@ -4,7 +4,8 @@ import type {
   MessageFlags,
   MessageFilters,
   FolderType,
-  AiBlacklistPatternType
+  AiBlacklistPatternType,
+  ComposeMailData
 } from '../shared/types'
 
 /**
@@ -91,6 +92,11 @@ const api = {
     defaultPaths: () => ipcRenderer.invoke('import:defaultPaths'),
     run: (accountId: number, mboxFiles: unknown[]) =>
       ipcRenderer.invoke('import:run', accountId, toRaw(mboxFiles))
+  },
+
+  // ── Mail (Compose & Send) ────────────────────────────────────────────
+  mail: {
+    send: (data: ComposeMailData) => ipcRenderer.invoke('mail:send', toRaw(data))
   },
 
   // ── Settings ───────────────────────────────────────────────────────────

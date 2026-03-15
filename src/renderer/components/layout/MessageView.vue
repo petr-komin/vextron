@@ -10,6 +10,12 @@ import { useToast } from 'primevue/usetoast'
 const messagesStore = useMessagesStore()
 const toast = useToast()
 
+const emit = defineEmits<{
+  reply: []
+  'reply-all': []
+  forward: []
+}>()
+
 /** Whether the user allowed remote images for the current message */
 const imagesAllowed = ref(false)
 
@@ -307,6 +313,17 @@ async function blockSenderFromAi(): Promise<void> {
             rounded
             size="small"
             v-tooltip.bottom="'Reply'"
+            @click="emit('reply')"
+          />
+          <Button
+            icon="pi pi-reply"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            v-tooltip.bottom="'Reply All'"
+            @click="emit('reply-all')"
+            class="reply-all-btn"
           />
           <Button
             icon="pi pi-arrow-right"
@@ -315,6 +332,7 @@ async function blockSenderFromAi(): Promise<void> {
             rounded
             size="small"
             v-tooltip.bottom="'Forward'"
+            @click="emit('forward')"
           />
           <Button
             :icon="messagesStore.activeMessage.flags.flagged ? 'pi pi-star-fill' : 'pi pi-star'"
@@ -654,5 +672,10 @@ async function blockSenderFromAi(): Promise<void> {
   justify-content: center;
   flex: 1;
   color: var(--vx-text-muted);
+}
+
+.reply-all-btn :deep(.pi-reply) {
+  /* Double-arrow effect: add a shadow offset to simulate two reply arrows */
+  text-shadow: 2px 0 0 currentColor;
 }
 </style>

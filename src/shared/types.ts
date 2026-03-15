@@ -224,6 +224,28 @@ export interface ImageAllowlistEntry {
   createdAt: string
 }
 
+// ─── Mail Compose types ─────────────────────────────────────────────────────
+
+export interface ComposeMailData {
+  accountId: number
+  to: string[]
+  cc?: string[]
+  bcc?: string[]
+  subject: string
+  bodyText?: string
+  bodyHtml?: string
+  /** In-Reply-To header for threading */
+  inReplyTo?: string
+  /** References header for threading */
+  references?: string[]
+}
+
+export interface SendMailResult {
+  success: boolean
+  messageId?: string
+  error?: string
+}
+
 // ─── IPC Channel types ──────────────────────────────────────────────────────
 
 export interface IpcChannels {
@@ -276,6 +298,9 @@ export interface IpcChannels {
   'settings:imageAllowlist:add': (domain: string) => Promise<void>
   'settings:imageAllowlist:remove': (domain: string) => Promise<void>
   'settings:imageAllowlist:check': (domain: string) => Promise<boolean>
+
+  // Mail — Compose & Send
+  'mail:send': (data: ComposeMailData) => Promise<SendMailResult>
 }
 
 // ─── Connection status ───────────────────────────────────────────────────────

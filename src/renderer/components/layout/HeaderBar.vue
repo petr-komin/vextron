@@ -8,6 +8,10 @@ import ThunderbirdImportDialog from '../ThunderbirdImportDialog.vue'
 const router = useRouter()
 const importDialogVisible = ref(false)
 
+const emit = defineEmits<{
+  compose: []
+}>()
+
 /** View mode injected from MailView */
 const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
 
@@ -51,6 +55,7 @@ function onImported() {
         rounded
         aria-label="Compose"
         v-tooltip.bottom="'Compose new email'"
+        @click="emit('compose')"
       />
       <Button
         icon="pi pi-download"

@@ -2,7 +2,7 @@ import { getDb } from '../db/connection'
 import { accounts } from '../db/schema/accounts'
 import { folders } from '../db/schema/folders'
 import { messages } from '../db/schema/messages'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { imapManager } from './connection-manager'
 import { listMailboxes } from './connection'
 import { computeDedupHash } from '../dedup'
@@ -116,6 +116,63 @@ export interface SyncFolderResult {
   count: number
   /** DB IDs of actually inserted messages */
   newMessageIds: number[]
+}
+
+/**
+ * Retry IMAP move-to-Trash for soft-deleted messages that failed on the initial attempt.
+ * A message needs retry when: deletedAt IS NOT NULL AND folderId != trashFolder.id
+ * (i.e. it was soft-deleted locally but the IMAP move didn't succeed).
+ *
+ * Called during sync after the mailbox lock is already acquired.
+ */
+async function processPendingDeletes(
+  accountId: number,
+  folderId: number,
+  folderPath: string,
+  client: ImapFlow
+): Promise<void> {
+  const db = getDb()
+
+  // Find the Trash folder for this account
+  const [trashFolder] = await db
+    .select()
+    .from(folders)
+    .where(and(eq(folders.accountId, accountId), eq(folders.type, 'trash')))
+  if (!trashFolder) return
+
+  // Nothing to do for the trash folder itself
+  if (folderId === trashFolder.id) return
+
+  // Find soft-deleted messages still in this folder (not yet moved to Trash on IMAP)
+  const pendingDeletes = await db
+    .select({ id: messages.id, uid: messages.uid })
+    .from(messages)
+    .where(and(
+      eq(messages.folderId, folderId),
+      eq(messages.accountId, accountId),
+      isNotNull(messages.deletedAt)
+    ))
+
+  if (pendingDeletes.length === 0) return
+
+  console.log(`[sync] Processing ${pendingDeletes.length} pending delete(s) in folder ${folderPath}`)
+
+  const lock = await client.getMailboxLock(folderPath)
+  try {
+    for (const msg of pendingDeletes) {
+      try {
+        await client.messageMove(msg.uid.toString(), trashFolder.path, { uid: true })
+        // IMAP move succeeded — update local folderId to Trash
+        await db.update(messages)
+          .set({ folderId: trashFolder.id })
+          .where(eq(messages.id, msg.id))
+      } catch (err) {
+        console.warn(`[sync] Pending delete retry failed for msg ${msg.id}:`, err)
+      }
+    }
+  } finally {
+    lock.release()
+  }
 }
 
 /**
@@ -269,11 +326,11 @@ export async function syncFolderMessages(
         }
       }
 
-      // Recount unread from DB for accuracy
+      // Recount unread from DB for accuracy (exclude soft-deleted messages)
       const allFolderMsgs = await db
         .select({ flags: messages.flags })
         .from(messages)
-        .where(eq(messages.folderId, folderId))
+        .where(and(eq(messages.folderId, folderId), isNull(messages.deletedAt)))
       const unreadCount = allFolderMsgs.filter((m) => {
         const f = m.flags as { seen: boolean }
         return !f.seen
@@ -285,6 +342,13 @@ export async function syncFolderMessages(
 
     } finally {
       lock.release()
+    }
+
+    // Retry any pending deletes (soft-deleted messages not yet moved to Trash on IMAP)
+    try {
+      await processPendingDeletes(accountId, folderId, folder.path, client)
+    } catch (err) {
+      console.warn(`[sync] processPendingDeletes failed for folder ${folder.path}:`, err)
     }
 
     return { count: newMessageIds.length, newMessageIds }

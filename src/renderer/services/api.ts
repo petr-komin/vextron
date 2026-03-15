@@ -20,7 +20,9 @@ import type {
   AiBlacklistPatternType,
   ImageAllowlistEntry,
   AnalyzedMessageItem,
-  SemanticSearchResult
+  SemanticSearchResult,
+  ComposeMailData,
+  SendMailResult
 } from '../../shared/types'
 
 export interface MailApi {
@@ -76,6 +78,9 @@ export interface MailApi {
       check(domain: string): Promise<boolean>
     }
   }
+  mail: {
+    send(data: ComposeMailData): Promise<SendMailResult>
+  }
 }
 
 function isElectron(): boolean {
@@ -91,7 +96,8 @@ function createElectronApi(): MailApi {
     sync: api.sync,
     import: api.import,
     ai: api.ai,
-    settings: api.settings
+    settings: api.settings,
+    mail: api.mail
   } as MailApi
 }
 
@@ -110,3 +116,4 @@ export const syncApi = isElectron() ? window.electronAPI.sync : null
 export const importApi = isElectron() ? window.electronAPI.import : null
 export const aiApi = isElectron() ? window.electronAPI.ai : null
 export const settingsApi = isElectron() ? window.electronAPI.settings : null
+export const mailApi = isElectron() ? window.electronAPI.mail : null

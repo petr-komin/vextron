@@ -6,9 +6,38 @@ import MessageList from './MessageList.vue'
 import MessageView from './MessageView.vue'
 import StatusBar from './StatusBar.vue'
 import AiOverview from '../ai/AiOverview.vue'
+import ComposeDialog from '../ComposeDialog.vue'
+import type { ComposeContext, ComposeMode } from '../ComposeDialog.vue'
+import { useMessagesStore } from '../../stores/messages'
 
 /** View mode injected from MailView */
 const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
+
+const messagesStore = useMessagesStore()
+
+// ── Compose dialog state ────────────────────────────────────────────────────
+
+const composeVisible = ref(false)
+const composeContext = ref<ComposeContext>({ mode: 'new' })
+
+function openCompose(mode: ComposeMode = 'new'): void {
+  const ctx: ComposeContext = { mode }
+  if (mode !== 'new' && messagesStore.activeMessage) {
+    // Deep-clone to strip reactive proxies (structured clone can't handle them)
+    ctx.originalMessage = JSON.parse(JSON.stringify(messagesStore.activeMessage))
+  }
+  composeContext.value = ctx
+  composeVisible.value = true
+}
+
+/**
+ * Handle successful send — mark original message as answered if this was a reply.
+ */
+function onSent(data: { messageId?: string; originalMessageId?: number; mode: ComposeMode }): void {
+  if ((data.mode === 'reply' || data.mode === 'reply-all') && data.originalMessageId) {
+    messagesStore.setFlags(data.originalMessageId, { answered: true })
+  }
+}
 
 defineProps<{
   showMessageView?: boolean
@@ -17,13 +46,18 @@ defineProps<{
 
 <template>
   <div class="app-layout">
-    <HeaderBar class="app-header" />
+    <HeaderBar class="app-header" @compose="openCompose('new')" />
 
     <!-- Normal 3-panel mail view -->
     <div v-if="viewMode === 'mail'" class="app-body">
       <Sidebar class="app-sidebar" />
       <MessageList class="app-message-list" />
-      <MessageView class="app-message-view" />
+      <MessageView
+        class="app-message-view"
+        @reply="openCompose('reply')"
+        @reply-all="openCompose('reply-all')"
+        @forward="openCompose('forward')"
+      />
     </div>
 
     <!-- AI Overview grouped view -->
@@ -32,6 +66,13 @@ defineProps<{
     </div>
 
     <StatusBar class="app-statusbar" />
+
+    <!-- Compose Dialog (teleported to body by PrimeVue) -->
+    <ComposeDialog
+      v-model:visible="composeVisible"
+      :context="composeContext"
+      @sent="onSent"
+    />
   </div>
 </template>
 
