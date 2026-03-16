@@ -13,11 +13,12 @@ const emit = defineEmits<{
 }>()
 
 /** View mode injected from MailView */
-const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
+const viewMode = inject<Ref<'mail' | 'ai' | 'contacts'>>('viewMode', ref('mail'))
 
 const viewModeOptions = [
   { label: 'Mail', value: 'mail', icon: 'pi pi-envelope' },
-  { label: 'AI Overview', value: 'ai', icon: 'pi pi-sparkles' }
+  { label: 'AI Overview', value: 'ai', icon: 'pi pi-sparkles' },
+  { label: 'Contacts', value: 'contacts', icon: 'pi pi-users' }
 ]
 
 function onImported() {

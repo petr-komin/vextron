@@ -47,6 +47,11 @@ export const messages = pgTable('messages', {
     .default({ seen: false, flagged: false, answered: false, draft: false, deleted: false }),
   size: integer('size').notNull().default(0),
   hasAttachments: boolean('has_attachments').notNull().default(false),
+  /** Attachment metadata extracted from mailparser. Content downloaded on-demand from IMAP. */
+  attachments: jsonb('attachments')
+    .$type<Array<{ filename: string; contentType: string; size: number; partNumber: string; contentId?: string }>>()
+    .notNull()
+    .default([]),
   rawHeaders: jsonb('raw_headers').$type<Record<string, string>>(),
 
   // AI fields

@@ -99,6 +99,33 @@ const api = {
     send: (data: ComposeMailData) => ipcRenderer.invoke('mail:send', toRaw(data))
   },
 
+  // ── Contacts ───────────────────────────────────────────────────────────
+  contacts: {
+    listFavorites: () => ipcRenderer.invoke('contacts:listFavorites'),
+    add: (accountId: number, email: string, name: string) =>
+      ipcRenderer.invoke('contacts:add', accountId, email, name),
+    remove: (id: number) => ipcRenderer.invoke('contacts:remove', id),
+    check: (accountId: number, email: string) =>
+      ipcRenderer.invoke('contacts:check', accountId, email),
+    messages: (email: string, page?: number, limit?: number) =>
+      ipcRenderer.invoke('contacts:messages', email, page, limit),
+    messagesCount: (email: string) => ipcRenderer.invoke('contacts:messagesCount', email)
+  },
+
+  // ── Attachments ────────────────────────────────────────────────────────
+  attachments: {
+    download: (messageId: number, partNumber: string, filename: string) =>
+      ipcRenderer.invoke('attachments:download', messageId, partNumber, filename),
+    open: (messageId: number, partNumber: string, filename: string) =>
+      ipcRenderer.invoke('attachments:open', messageId, partNumber, filename)
+  },
+
+  // ── Avatars ────────────────────────────────────────────────────────────
+  avatars: {
+    resolve: (email: string) => ipcRenderer.invoke('avatars:resolve', email),
+    batch: (emails: string[]) => ipcRenderer.invoke('avatars:batch', toRaw(emails))
+  },
+
   // ── Settings ───────────────────────────────────────────────────────────
   settings: {
     imageAllowlist: {

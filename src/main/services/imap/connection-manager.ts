@@ -127,7 +127,11 @@ class ImapConnectionManager {
     })
 
     client.on('error', (err: Error) => {
-      console.error(`[IMAP] Connection error for account ${accountId}:`, err.message)
+      let detail = err.message
+      const e = err as unknown as Record<string, unknown>
+      if (e?.responseText) detail += `: ${e.responseText}`
+      if (e?.responseStatus) detail += ` [${e.responseStatus}]`
+      console.error(`[IMAP] Connection error for account ${accountId}:`, detail)
       const m = this.connections.get(accountId)
       if (m && m.client === client) {
         m.connected = false

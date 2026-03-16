@@ -5,6 +5,9 @@ import { messagesHandlers } from './messages'
 import { settingsHandlers } from './settings'
 import { aiHandlers } from './ai'
 import { mailHandlers } from './mail'
+import { contactsHandlers } from './contacts'
+import { attachmentsHandlers } from './attachments'
+import { avatarsHandlers } from './avatars'
 import { registerSyncHandlers } from './sync'
 import { registerImportHandlers } from './import'
 
@@ -40,7 +43,11 @@ function wrapHandler(channel: string, handler: IpcHandler): IpcHandler {
     } catch (error) {
       // Re-throw as a plain Error with just the message string.
       // Electron can serialize basic Error objects, but not all subclasses.
-      const message = error instanceof Error ? error.message : String(error)
+      // Preserve imapflow extended error info (responseText, responseStatus)
+      let message = error instanceof Error ? error.message : String(error)
+      const err = error as Record<string, unknown>
+      if (err?.responseText) message += `: ${err.responseText}`
+      if (err?.responseStatus) message += ` [${err.responseStatus}]`
       console.error(`[IPC] Error in ${channel}:`, message)
       throw new Error(message)
     }
@@ -54,7 +61,10 @@ export function registerIpcHandlers(): void {
     ...messagesHandlers,
     ...settingsHandlers,
     ...aiHandlers,
-    ...mailHandlers
+    ...mailHandlers,
+    ...contactsHandlers,
+    ...attachmentsHandlers,
+    ...avatarsHandlers
   } as HandlerMap
 
   for (const [channel, handler] of Object.entries(allHandlers)) {

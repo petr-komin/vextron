@@ -1,5 +1,5 @@
 import type { IpcMainInvokeEvent } from 'electron'
-import type { Message, MessageListItem, MessageFlags, EmailAddress, MessageFilters, SearchField, FolderType, AnalyzedMessageItem } from '../../shared/types'
+import type { Message, MessageListItem, MessageFlags, EmailAddress, MessageFilters, SearchField, FolderType, AnalyzedMessageItem, Attachment } from '../../shared/types'
 import { getDb } from '../services/db/connection'
 import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
@@ -189,11 +189,13 @@ export const messagesHandlers = {
     // Lazy body loading: if body is empty, fetch from IMAP
     let bodyText = row.bodyText
     let bodyHtml = row.bodyHtml
+    let attachments = (row.attachments ?? []) as Attachment[]
     if (!bodyText && !bodyHtml) {
       try {
         const body = await fetchMessageBody(row.accountId, row.folderId, row.id)
         bodyText = body.bodyText
         bodyHtml = body.bodyHtml
+        attachments = body.attachments as Attachment[]
       } catch (error) {
         console.error(`[Messages] Failed to fetch body for message ${messageId}:`, error)
         // Return empty body rather than failing the whole get
@@ -217,6 +219,7 @@ export const messagesHandlers = {
       flags: row.flags as MessageFlags,
       size: row.size,
       hasAttachments: row.hasAttachments,
+      attachments,
       aiCategory: row.aiCategory ?? undefined,
       aiPriority: row.aiPriority as Message['aiPriority'],
       aiSummary: row.aiSummary ?? undefined

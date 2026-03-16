@@ -359,12 +359,13 @@ export async function syncFolderMessages(
  * Fetch full message body (text + html) from IMAP and update DB.
  * Called on-demand when user clicks a message.
  * Reuses the shared persistent connection.
+ * Also extracts attachment metadata (filename, type, size, part numbers).
  */
 export async function fetchMessageBody(
   accountId: number,
   folderId: number,
   messageDbId: number
-): Promise<{ bodyText: string; bodyHtml: string }> {
+): Promise<{ bodyText: string; bodyHtml: string; attachments: Array<{ filename: string; contentType: string; size: number; partNumber: string; contentId?: string }> }> {
   const db = getDb()
 
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageDbId))
@@ -372,7 +373,11 @@ export async function fetchMessageBody(
 
   // If body already fetched, return it from DB
   if (msg.bodyText || msg.bodyHtml) {
-    return { bodyText: msg.bodyText, bodyHtml: msg.bodyHtml }
+    return {
+      bodyText: msg.bodyText,
+      bodyHtml: msg.bodyHtml,
+      attachments: (msg.attachments ?? []) as Array<{ filename: string; contentType: string; size: number; partNumber: string; contentId?: string }>
+    }
   }
 
   const [folder] = await db.select().from(folders).where(eq(folders.id, folderId))
@@ -381,6 +386,7 @@ export async function fetchMessageBody(
   return imapManager.withClient(accountId, async (client) => {
     let bodyText = ''
     let bodyHtml = ''
+    let attachmentMeta: Array<{ filename: string; contentType: string; size: number; partNumber: string; contentId?: string }> = []
 
     const lock = await client.getMailboxLock(folder.path)
     try {
@@ -397,20 +403,36 @@ export async function fetchMessageBody(
 
         bodyText = parsed.text || ''
         bodyHtml = parsed.html || ''
+
+        // Extract attachment metadata from parsed message
+        if (parsed.attachments && parsed.attachments.length > 0) {
+          attachmentMeta = parsed.attachments.map((att, index) => ({
+            filename: att.filename || `attachment-${index + 1}`,
+            contentType: att.contentType || 'application/octet-stream',
+            size: att.size || 0,
+            // mailparser doesn't expose MIME part numbers directly,
+            // so we use 1-based index as a fallback identifier.
+            // The actual download will re-parse the message anyway.
+            partNumber: String(index + 1),
+            ...(att.cid ? { contentId: att.cid } : {})
+          }))
+        }
       }
     } finally {
       lock.release()
     }
 
-    // Update DB with fetched body
+    // Update DB with fetched body + attachment metadata
     const preview = extractPreview(bodyText || bodyHtml.replace(/<[^>]*>/g, ' '))
     await db.update(messages).set({
       bodyText,
       bodyHtml,
-      preview: preview || msg.subject
+      preview: preview || msg.subject,
+      attachments: attachmentMeta,
+      hasAttachments: attachmentMeta.length > 0
     }).where(eq(messages.id, messageDbId))
 
-    return { bodyText, bodyHtml }
+    return { bodyText, bodyHtml, attachments: attachmentMeta }
   })
 }
 

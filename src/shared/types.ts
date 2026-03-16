@@ -80,6 +80,7 @@ export interface Message {
   flags: MessageFlags
   size: number
   hasAttachments: boolean
+  attachments: Attachment[]
   // AI fields
   aiCategory?: string
   aiPriority?: 'high' | 'medium' | 'low'
@@ -126,11 +127,19 @@ export interface SemanticSearchResult extends AnalyzedMessageItem {
 // ─── Attachment types ────────────────────────────────────────────────────────
 
 export interface Attachment {
-  id: number
-  messageId: number
   filename: string
   contentType: string
   size: number
+  /** MIME part number for on-demand IMAP download (e.g. "1.2", "2") */
+  partNumber: string
+  /** Content-ID for inline images (cid: references) */
+  contentId?: string
+}
+
+export interface AttachmentSaveResult {
+  success: boolean
+  filePath?: string
+  error?: string
 }
 
 // ─── AI types ────────────────────────────────────────────────────────────────
@@ -224,6 +233,28 @@ export interface ImageAllowlistEntry {
   createdAt: string
 }
 
+// ─── Contact types ───────────────────────────────────────────────────────────
+
+export interface Contact {
+  id: number
+  accountId: number
+  email: string
+  name: string
+  frequency: number
+  lastContacted?: string
+  isFavorite: boolean
+  createdAt: string
+}
+
+// ─── Avatar types ─────────────────────────────────────────────────────────────
+
+export type AvatarSource = 'gravatar' | 'favicon-im' | 'google-favicon' | 'identicon'
+
+export interface AvatarResult {
+  url: string
+  source: AvatarSource
+}
+
 // ─── Mail Compose types ─────────────────────────────────────────────────────
 
 export interface ComposeMailData {
@@ -301,6 +332,22 @@ export interface IpcChannels {
 
   // Mail — Compose & Send
   'mail:send': (data: ComposeMailData) => Promise<SendMailResult>
+
+  // Contacts
+  'contacts:listFavorites': () => Promise<Contact[]>
+  'contacts:add': (accountId: number, email: string, name: string) => Promise<Contact>
+  'contacts:remove': (id: number) => Promise<void>
+  'contacts:check': (accountId: number, email: string) => Promise<boolean>
+  'contacts:messages': (email: string, page: number, limit: number) => Promise<MessageListItem[]>
+  'contacts:messagesCount': (email: string) => Promise<number>
+
+  // Attachments
+  'attachments:download': (messageId: number, partNumber: string, filename: string) => Promise<AttachmentSaveResult>
+  'attachments:open': (messageId: number, partNumber: string, filename: string) => Promise<AttachmentSaveResult>
+
+  // Avatars
+  'avatars:resolve': (email: string) => Promise<AvatarResult>
+  'avatars:batch': (emails: string[]) => Promise<Record<string, AvatarResult>>
 }
 
 // ─── Connection status ───────────────────────────────────────────────────────

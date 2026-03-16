@@ -6,12 +6,13 @@ import MessageList from './MessageList.vue'
 import MessageView from './MessageView.vue'
 import StatusBar from './StatusBar.vue'
 import AiOverview from '../ai/AiOverview.vue'
+import ContactsView from '../contacts/ContactsView.vue'
 import ComposeDialog from '../ComposeDialog.vue'
 import type { ComposeContext, ComposeMode } from '../ComposeDialog.vue'
 import { useMessagesStore } from '../../stores/messages'
 
 /** View mode injected from MailView */
-const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode', ref('mail'))
+const viewMode = inject<Ref<'mail' | 'ai' | 'contacts'>>('viewMode', ref('mail'))
 
 const messagesStore = useMessagesStore()
 
@@ -61,8 +62,13 @@ defineProps<{
     </div>
 
     <!-- AI Overview grouped view -->
-    <div v-else class="app-body app-body-ai">
+    <div v-else-if="viewMode === 'ai'" class="app-body app-body-ai">
       <AiOverview class="app-ai-overview" />
+    </div>
+
+    <!-- Contacts / Favorite senders view -->
+    <div v-else-if="viewMode === 'contacts'" class="app-body app-body-contacts">
+      <ContactsView class="app-contacts-view" />
     </div>
 
     <StatusBar class="app-statusbar" />
@@ -136,6 +142,16 @@ defineProps<{
   flex: 1;
   background: var(--vx-bg-primary);
   overflow-y: auto;
+}
+
+.app-body-contacts {
+  display: flex;
+}
+
+.app-contacts-view {
+  flex: 1;
+  background: var(--vx-bg-primary);
+  overflow: hidden;
 }
 
 .app-statusbar {

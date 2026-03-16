@@ -22,7 +22,10 @@ import type {
   AnalyzedMessageItem,
   SemanticSearchResult,
   ComposeMailData,
-  SendMailResult
+  SendMailResult,
+  Contact,
+  AttachmentSaveResult,
+  AvatarResult
 } from '../../shared/types'
 
 export interface MailApi {
@@ -81,6 +84,22 @@ export interface MailApi {
   mail: {
     send(data: ComposeMailData): Promise<SendMailResult>
   }
+  contacts: {
+    listFavorites(): Promise<Contact[]>
+    add(accountId: number, email: string, name: string): Promise<Contact>
+    remove(id: number): Promise<void>
+    check(accountId: number, email: string): Promise<boolean>
+    messages(email: string, page?: number, limit?: number): Promise<MessageListItem[]>
+    messagesCount(email: string): Promise<number>
+  }
+  attachments: {
+    download(messageId: number, partNumber: string, filename: string): Promise<AttachmentSaveResult>
+    open(messageId: number, partNumber: string, filename: string): Promise<AttachmentSaveResult>
+  }
+  avatars: {
+    resolve(email: string): Promise<AvatarResult>
+    batch(emails: string[]): Promise<Record<string, AvatarResult>>
+  }
 }
 
 function isElectron(): boolean {
@@ -97,7 +116,10 @@ function createElectronApi(): MailApi {
     import: api.import,
     ai: api.ai,
     settings: api.settings,
-    mail: api.mail
+    mail: api.mail,
+    contacts: api.contacts,
+    attachments: api.attachments,
+    avatars: api.avatars
   } as MailApi
 }
 
@@ -117,3 +139,5 @@ export const importApi = isElectron() ? window.electronAPI.import : null
 export const aiApi = isElectron() ? window.electronAPI.ai : null
 export const settingsApi = isElectron() ? window.electronAPI.settings : null
 export const mailApi = isElectron() ? window.electronAPI.mail : null
+export const contactsApi = isElectron() ? window.electronAPI.contacts : null
+export const attachmentsApi = isElectron() ? window.electronAPI.attachments : null

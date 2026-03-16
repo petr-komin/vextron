@@ -2,12 +2,16 @@
 import { computed, ref, watch, onMounted } from 'vue'
 import DOMPurify from 'dompurify'
 import { useMessagesStore } from '../../stores/messages'
+import { useContactsStore } from '../../stores/contacts'
 import { api } from '../../services/api'
+import { useAvatar } from '../../composables/useAvatar'
+import type { Attachment } from '../../../shared/types'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import { useToast } from 'primevue/usetoast'
 
 const messagesStore = useMessagesStore()
+const contactsStore = useContactsStore()
 const toast = useToast()
 
 const emit = defineEmits<{
@@ -27,6 +31,21 @@ const aiAnalyzing = ref(false)
 
 /** Whether AI config is set up */
 const aiConfigured = ref(false)
+
+/** Whether the current sender is already a favorite contact */
+const isFavoriteContact = ref(false)
+
+/** Loading state for the favorite button */
+const addingToFavorites = ref(false)
+
+/** Sender avatar resolution */
+const senderEmail = computed(() => messagesStore.activeMessage?.from?.address ?? null)
+const senderAvatarUrl = useAvatar(senderEmail)
+/** Set to true when the avatar img fails to load — falls back to initial letter */
+const senderAvatarError = ref(false)
+watch(senderEmail, () => {
+  senderAvatarError.value = false
+})
 
 /** Load the allowlist from DB on mount + check AI config */
 onMounted(async () => {
@@ -57,12 +76,20 @@ function getSenderDomain(): string | null {
 }
 
 // Reset when switching messages; auto-allow if sender domain is allowlisted
-watch(() => messagesStore.activeMessage?.id, () => {
+watch(() => messagesStore.activeMessage?.id, async () => {
   const domain = getSenderDomain()
   if (domain && allowedDomains.value.has(domain)) {
     imagesAllowed.value = true
   } else {
     imagesAllowed.value = false
+  }
+
+  // Check if sender is a favorite contact
+  const msg = messagesStore.activeMessage
+  if (msg?.from?.address) {
+    isFavoriteContact.value = await contactsStore.isContact(msg.accountId, msg.from.address)
+  } else {
+    isFavoriteContact.value = false
   }
 })
 
@@ -269,6 +296,126 @@ async function blockSenderFromAi(): Promise<void> {
     })
   }
 }
+
+// ─── Attachment helpers ──────────────────────────────────────────────────────
+
+/** Set of partNumbers currently being downloaded/opened */
+const attachmentLoading = ref<Set<string>>(new Set())
+
+/** Get a PrimeIcons icon class for common file types */
+function getAttachmentIcon(contentType: string, filename: string): string {
+  const ct = contentType.toLowerCase()
+  if (ct.startsWith('image/')) return 'pi pi-image'
+  if (ct === 'application/pdf') return 'pi pi-file-pdf'
+  if (ct.includes('spreadsheet') || ct.includes('excel') || filename.match(/\.xlsx?$/i)) return 'pi pi-file-excel'
+  if (ct.includes('word') || ct.includes('document') || filename.match(/\.docx?$/i)) return 'pi pi-file-word'
+  if (ct.includes('zip') || ct.includes('archive') || ct.includes('compressed')) return 'pi pi-box'
+  if (ct.startsWith('text/')) return 'pi pi-file'
+  if (ct.startsWith('video/')) return 'pi pi-video'
+  if (ct.startsWith('audio/')) return 'pi pi-volume-up'
+  return 'pi pi-file'
+}
+
+/** Format file size to human-readable string */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / Math.pow(1024, i)
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
+/** Save an attachment to disk via native file dialog */
+async function saveAttachment(att: Attachment): Promise<void> {
+  const msg = messagesStore.activeMessage
+  if (!msg || attachmentLoading.value.has(att.partNumber)) return
+
+  attachmentLoading.value.add(att.partNumber)
+  try {
+    const result = await api.attachments.download(msg.id, att.partNumber, att.filename)
+    if (result.success) {
+      toast.add({
+        severity: 'success',
+        summary: 'Saved',
+        detail: `${att.filename} saved successfully`,
+        life: 3000
+      })
+    } else if (result.error) {
+      toast.add({
+        severity: 'error',
+        summary: 'Save Failed',
+        detail: result.error,
+        life: 5000
+      })
+    }
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Save Failed',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+      life: 5000
+    })
+  } finally {
+    attachmentLoading.value.delete(att.partNumber)
+  }
+}
+
+/** Open an attachment with the system default application */
+async function openAttachment(att: Attachment): Promise<void> {
+  const msg = messagesStore.activeMessage
+  if (!msg || attachmentLoading.value.has(att.partNumber)) return
+
+  attachmentLoading.value.add(att.partNumber)
+  try {
+    const result = await api.attachments.open(msg.id, att.partNumber, att.filename)
+    if (!result.success && result.error) {
+      toast.add({
+        severity: 'error',
+        summary: 'Open Failed',
+        detail: result.error,
+        life: 5000
+      })
+    }
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Open Failed',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+      life: 5000
+    })
+  } finally {
+    attachmentLoading.value.delete(att.partNumber)
+  }
+}
+
+/**
+ * Add the current sender to favorite contacts.
+ */
+async function addToFavorites(): Promise<void> {
+  const msg = messagesStore.activeMessage
+  if (!msg?.from?.address || addingToFavorites.value) return
+
+  addingToFavorites.value = true
+  try {
+    await contactsStore.addContact(msg.accountId, msg.from.address, msg.from.name || '')
+    isFavoriteContact.value = true
+    toast.add({
+      severity: 'success',
+      summary: 'Added to Favorites',
+      detail: `${msg.from.name || msg.from.address} added to favorite senders`,
+      life: 3000
+    })
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: err instanceof Error ? err.message : 'Failed to add contact',
+      life: 5000
+    })
+  } finally {
+    addingToFavorites.value = false
+  }
+}
 </script>
 
 <template>
@@ -357,8 +504,14 @@ async function blockSenderFromAi(): Promise<void> {
 
       <!-- Sender info -->
       <div class="view-sender">
-        <div class="sender-avatar">
-          {{ (messagesStore.activeMessage.from.name || messagesStore.activeMessage.from.address).charAt(0).toUpperCase() }}
+        <div class="sender-avatar" :class="{ 'sender-avatar--has-img': senderAvatarUrl && !senderAvatarError }">
+          <img
+            v-if="senderAvatarUrl && !senderAvatarError"
+            :src="senderAvatarUrl"
+            class="sender-avatar-img"
+            @error="senderAvatarError = true"
+          />
+          <span v-else>{{ (messagesStore.activeMessage.from.name || messagesStore.activeMessage.from.address).charAt(0).toUpperCase() }}</span>
         </div>
         <div class="sender-info">
           <div class="sender-name">
@@ -368,6 +521,17 @@ async function blockSenderFromAi(): Promise<void> {
             {{ messagesStore.activeMessage.from.address }}
           </div>
         </div>
+        <Button
+          v-if="!isFavoriteContact"
+          icon="pi pi-user-plus"
+          severity="secondary"
+          text
+          rounded
+          size="small"
+          :loading="addingToFavorites"
+          v-tooltip.bottom="'Add to favorite senders'"
+          @click="addToFavorites"
+        />
         <div class="view-date">
           {{ formatDate(messagesStore.activeMessage.date) }}
         </div>
@@ -425,6 +589,51 @@ async function blockSenderFromAi(): Promise<void> {
         <div v-if="messagesStore.activeMessage.aiSummary" class="ai-field">
           <span class="ai-label">Summary:</span>
           <span>{{ messagesStore.activeMessage.aiSummary }}</span>
+        </div>
+      </div>
+
+      <!-- Attachments panel -->
+      <div
+        v-if="messagesStore.activeMessage.attachments && messagesStore.activeMessage.attachments.length > 0"
+        class="attachments-panel"
+      >
+        <div class="attachments-header">
+          <i class="pi pi-paperclip" />
+          {{ messagesStore.activeMessage.attachments.length }}
+          {{ messagesStore.activeMessage.attachments.length === 1 ? 'attachment' : 'attachments' }}
+        </div>
+        <div class="attachments-list">
+          <div
+            v-for="att in messagesStore.activeMessage.attachments"
+            :key="att.partNumber"
+            class="attachment-item"
+          >
+            <i :class="getAttachmentIcon(att.contentType, att.filename)" class="attachment-icon" />
+            <div class="attachment-info">
+              <span class="attachment-name" :title="att.filename">{{ att.filename }}</span>
+              <span class="attachment-size">{{ formatFileSize(att.size) }}</span>
+            </div>
+            <Button
+              icon="pi pi-external-link"
+              severity="secondary"
+              text
+              rounded
+              size="small"
+              :loading="attachmentLoading.has(att.partNumber)"
+              v-tooltip.bottom="'Open'"
+              @click="openAttachment(att)"
+            />
+            <Button
+              icon="pi pi-download"
+              severity="secondary"
+              text
+              rounded
+              size="small"
+              :loading="attachmentLoading.has(att.partNumber)"
+              v-tooltip.bottom="'Save as...'"
+              @click="saveAttachment(att)"
+            />
+          </div>
         </div>
       </div>
 
@@ -519,6 +728,18 @@ async function blockSenderFromAi(): Promise<void> {
   font-weight: 600;
   font-size: 14px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sender-avatar--has-img {
+  background-color: transparent;
+}
+
+.sender-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .sender-info {
@@ -605,6 +826,77 @@ async function blockSenderFromAi(): Promise<void> {
   color: var(--vx-priority-low);
 }
 
+/* ─── Attachments panel ─────────────────────────────────────────────────── */
+
+.attachments-panel {
+  margin: 0 20px 12px;
+  padding: 10px 12px;
+  background: var(--vx-bg-secondary);
+  border: 1px solid var(--vx-border);
+  border-radius: 8px;
+}
+
+.attachments-header {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--vx-text-secondary);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachments-header .pi-paperclip {
+  font-size: 13px;
+}
+
+.attachments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.attachment-item:hover {
+  background: var(--vx-bg-hover);
+}
+
+.attachment-icon {
+  font-size: 16px;
+  color: var(--vx-accent);
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.attachment-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.attachment-name {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-size {
+  font-size: 10px;
+  color: var(--vx-text-muted);
+}
+
 .view-body {
   flex: 1;
   overflow-y: auto;
@@ -656,6 +948,12 @@ async function blockSenderFromAi(): Promise<void> {
   background: var(--vx-bg-secondary);
   border: 1px dashed var(--vx-border);
   border-radius: 4px;
+}
+
+/* Default cell padding for HTML email tables that don't specify their own */
+.body-html :deep(td),
+.body-html :deep(th) {
+  padding: 4px 8px;
 }
 
 .body-text {

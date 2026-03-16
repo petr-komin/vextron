@@ -73,17 +73,24 @@ export const labels = pgTable('labels', {
   createdAt: timestamp('created_at').notNull().defaultNow()
 })
 
-export const contacts = pgTable('contacts', {
-  id: serial('id').primaryKey(),
-  accountId: integer('account_id')
-    .notNull()
-    .references(() => accounts.id, { onDelete: 'cascade' }),
-  email: varchar('email', { length: 255 }).notNull(),
-  name: varchar('name', { length: 255 }).notNull().default(''),
-  frequency: integer('frequency').notNull().default(0),
-  lastContacted: timestamp('last_contacted'),
-  createdAt: timestamp('created_at').notNull().defaultNow()
-})
+export const contacts = pgTable(
+  'contacts',
+  {
+    id: serial('id').primaryKey(),
+    accountId: integer('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    email: varchar('email', { length: 255 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull().default(''),
+    frequency: integer('frequency').notNull().default(0),
+    lastContacted: timestamp('last_contacted'),
+    isFavorite: boolean('is_favorite').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow()
+  },
+  (table) => [
+    uniqueIndex('contacts_account_email_idx').on(table.accountId, table.email)
+  ]
+)
 
 // ─── Vector Embeddings ──────────────────────────────────────────────────────
 

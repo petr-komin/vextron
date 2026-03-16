@@ -10,7 +10,7 @@ import InputText from 'primevue/inputtext'
 import Dialog from 'primevue/dialog'
 
 const messagesStore = useMessagesStore()
-const viewMode = inject<Ref<'mail' | 'ai'>>('viewMode')
+const viewMode = inject<Ref<'mail' | 'ai' | 'contacts'>>('viewMode')
 
 const analyzedMessages = ref<AnalyzedMessageItem[]>([])
 const loading = ref(false)
