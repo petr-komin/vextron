@@ -302,6 +302,51 @@ async function blockSenderFromAi(): Promise<void> {
 /** Set of partNumbers currently being downloaded/opened */
 const attachmentLoading = ref<Set<string>>(new Set())
 
+// ─── Todo extraction ─────────────────────────────────────────────────────────
+
+/** Whether AI todo extraction is in progress */
+const extractingTodos = ref(false)
+
+/**
+ * Extract todo items from the current message via AI and emit an event
+ * so the global TodoDrawer can refresh its list.
+ */
+async function extractTodos(): Promise<void> {
+  const msg = messagesStore.activeMessage
+  if (!msg || extractingTodos.value) return
+
+  extractingTodos.value = true
+  try {
+    const items = await api.todos.extract(msg.id)
+    if (items.length === 0) {
+      toast.add({
+        severity: 'info',
+        summary: 'No todos found',
+        detail: 'AI did not find any actionable items in this email.',
+        life: 4000
+      })
+    } else {
+      toast.add({
+        severity: 'success',
+        summary: `${items.length} todo${items.length > 1 ? 's' : ''} extracted`,
+        detail: 'Open the todo list to review them.',
+        life: 4000
+      })
+      // Notify the drawer to refresh
+      window.dispatchEvent(new CustomEvent('vx:todos-updated'))
+    }
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Extraction failed',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+      life: 5000
+    })
+  } finally {
+    extractingTodos.value = false
+  }
+}
+
 /** Get a PrimeIcons icon class for common file types */
 function getAttachmentIcon(contentType: string, filename: string): string {
   const ct = contentType.toLowerCase()
@@ -442,6 +487,17 @@ async function addToFavorites(): Promise<void> {
             :disabled="!aiConfigured || isMessageTooOld"
             v-tooltip.bottom="aiButtonTooltip"
             @click="analyzeWithAi"
+          />
+          <Button
+            icon="pi pi-list-check"
+            severity="secondary"
+            text
+            rounded
+            size="small"
+            :loading="extractingTodos"
+            :disabled="!aiConfigured"
+            v-tooltip.bottom="'Extract todos with AI'"
+            @click="extractTodos"
           />
           <Button
             icon="pi pi-ban"

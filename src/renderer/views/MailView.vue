@@ -7,8 +7,8 @@ import AppLayout from '../components/layout/AppLayout.vue'
 const messagesStore = useMessagesStore()
 const foldersStore = useFoldersStore()
 
-/** View mode: 'mail' = normal 3-panel, 'ai' = AI Overview grouped view, 'contacts' = favorite senders view */
-const viewMode = ref<'mail' | 'ai' | 'contacts'>('mail')
+/** View mode: 'mail' = normal 3-panel, 'ai' = AI Overview, 'contacts' = favorite senders, 'todos' = todo list */
+const viewMode = ref<'mail' | 'ai' | 'contacts' | 'todos'>('mail')
 provide('viewMode', viewMode)
 
 /**

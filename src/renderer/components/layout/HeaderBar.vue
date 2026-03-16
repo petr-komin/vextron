@@ -10,15 +10,20 @@ const importDialogVisible = ref(false)
 
 const emit = defineEmits<{
   compose: []
+  'open-todos': []
 }>()
 
+/** Count of active (undone) todos — passed in as prop from AppLayout */
+const props = defineProps<{ activeTodoCount?: number }>()
+
 /** View mode injected from MailView */
-const viewMode = inject<Ref<'mail' | 'ai' | 'contacts'>>('viewMode', ref('mail'))
+const viewMode = inject<Ref<'mail' | 'ai' | 'contacts' | 'todos'>>('viewMode', ref('mail'))
 
 const viewModeOptions = [
   { label: 'Mail', value: 'mail', icon: 'pi pi-envelope' },
   { label: 'AI Overview', value: 'ai', icon: 'pi pi-sparkles' },
-  { label: 'Contacts', value: 'contacts', icon: 'pi pi-users' }
+  { label: 'Contacts', value: 'contacts', icon: 'pi pi-users' },
+  { label: 'Todos', value: 'todos', icon: 'pi pi-list-check' }
 ]
 
 function onImported() {
@@ -58,6 +63,18 @@ function onImported() {
         v-tooltip.bottom="'Compose new email'"
         @click="emit('compose')"
       />
+      <div class="todo-btn-wrap">
+        <Button
+          icon="pi pi-list-check"
+          severity="secondary"
+          text
+          rounded
+          aria-label="Todos"
+          v-tooltip.bottom="'Todo list'"
+          @click="emit('open-todos')"
+        />
+        <span v-if="props.activeTodoCount" class="todo-badge">{{ props.activeTodoCount }}</span>
+      </div>
       <Button
         icon="pi pi-download"
         severity="secondary"
@@ -130,5 +147,27 @@ function onImported() {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.todo-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.todo-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--vx-accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
 }
 </style>

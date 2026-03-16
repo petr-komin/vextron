@@ -8,6 +8,7 @@ import { mailHandlers } from './mail'
 import { contactsHandlers } from './contacts'
 import { attachmentsHandlers } from './attachments'
 import { avatarsHandlers } from './avatars'
+import { todosHandlers } from './todos'
 import { registerSyncHandlers } from './sync'
 import { registerImportHandlers } from './import'
 
@@ -64,7 +65,8 @@ export function registerIpcHandlers(): void {
     ...mailHandlers,
     ...contactsHandlers,
     ...attachmentsHandlers,
-    ...avatarsHandlers
+    ...avatarsHandlers,
+    ...todosHandlers
   } as HandlerMap
 
   for (const [channel, handler] of Object.entries(allHandlers)) {

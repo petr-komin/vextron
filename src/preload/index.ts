@@ -126,6 +126,14 @@ const api = {
     batch: (emails: string[]) => ipcRenderer.invoke('avatars:batch', toRaw(emails))
   },
 
+  // ── Todos ──────────────────────────────────────────────────────────────
+  todos: {
+    extract: (messageId: number) => ipcRenderer.invoke('todos:extract', messageId),
+    list: () => ipcRenderer.invoke('todos:list'),
+    toggle: (id: number, done: boolean) => ipcRenderer.invoke('todos:toggle', id, done),
+    delete: (id: number) => ipcRenderer.invoke('todos:delete', id)
+  },
+
   // ── Settings ───────────────────────────────────────────────────────────
   settings: {
     imageAllowlist: {

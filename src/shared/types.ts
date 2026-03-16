@@ -255,6 +255,19 @@ export interface AvatarResult {
   source: AvatarSource
 }
 
+// ─── Todo types ───────────────────────────────────────────────────────────────
+
+export interface TodoItem {
+  id: number
+  messageId: number
+  text: string
+  done: boolean
+  createdAt: string
+  /** Populated when fetching with message context */
+  messageSubject?: string
+  messageFrom?: string
+}
+
 // ─── Mail Compose types ─────────────────────────────────────────────────────
 
 export interface ComposeMailData {
@@ -348,6 +361,12 @@ export interface IpcChannels {
   // Avatars
   'avatars:resolve': (email: string) => Promise<AvatarResult>
   'avatars:batch': (emails: string[]) => Promise<Record<string, AvatarResult>>
+
+  // Todos
+  'todos:extract': (messageId: number) => Promise<TodoItem[]>
+  'todos:list': () => Promise<TodoItem[]>
+  'todos:toggle': (id: number, done: boolean) => Promise<void>
+  'todos:delete': (id: number) => Promise<void>
 }
 
 // ─── Connection status ───────────────────────────────────────────────────────

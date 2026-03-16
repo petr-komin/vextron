@@ -25,7 +25,8 @@ import type {
   SendMailResult,
   Contact,
   AttachmentSaveResult,
-  AvatarResult
+  AvatarResult,
+  TodoItem
 } from '../../shared/types'
 
 export interface MailApi {
@@ -100,6 +101,12 @@ export interface MailApi {
     resolve(email: string): Promise<AvatarResult>
     batch(emails: string[]): Promise<Record<string, AvatarResult>>
   }
+  todos: {
+    extract(messageId: number): Promise<TodoItem[]>
+    list(): Promise<TodoItem[]>
+    toggle(id: number, done: boolean): Promise<void>
+    delete(id: number): Promise<void>
+  }
 }
 
 function isElectron(): boolean {
@@ -119,7 +126,8 @@ function createElectronApi(): MailApi {
     mail: api.mail,
     contacts: api.contacts,
     attachments: api.attachments,
-    avatars: api.avatars
+    avatars: api.avatars,
+    todos: api.todos
   } as MailApi
 }
 

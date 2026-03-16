@@ -8,13 +8,18 @@ import StatusBar from './StatusBar.vue'
 import AiOverview from '../ai/AiOverview.vue'
 import ContactsView from '../contacts/ContactsView.vue'
 import ComposeDialog from '../ComposeDialog.vue'
+import TodoDrawer from '../TodoDrawer.vue'
+import TodosView from '../TodosView.vue'
 import type { ComposeContext, ComposeMode } from '../ComposeDialog.vue'
 import { useMessagesStore } from '../../stores/messages'
+import { useFoldersStore } from '../../stores/folders'
+import { api } from '../../services/api'
 
 /** View mode injected from MailView */
-const viewMode = inject<Ref<'mail' | 'ai' | 'contacts'>>('viewMode', ref('mail'))
+const viewMode = inject<Ref<'mail' | 'ai' | 'contacts' | 'todos'>>('viewMode', ref('mail'))
 
 const messagesStore = useMessagesStore()
+const foldersStore = useFoldersStore()
 
 // ── Compose dialog state ────────────────────────────────────────────────────
 
@@ -40,6 +45,62 @@ function onSent(data: { messageId?: string; originalMessageId?: number; mode: Co
   }
 }
 
+// ── Todo drawer state ───────────────────────────────────────────────────────
+
+const todoDrawerVisible = ref(false)
+const todoDrawerRef = ref<InstanceType<typeof TodoDrawer> | null>(null)
+
+const activeTodoCount = ref(0)
+
+// Keep badge count in sync — drawer exposes activeCount
+function onTodoDrawerShow(): void {
+  // Badge is updated via the drawer's activeCount after it loads
+}
+
+// Listen for extraction events to update badge without opening drawer
+function refreshTodoBadge(): void {
+  api.todos.list().then((items) => {
+    activeTodoCount.value = items.filter((t) => !t.done).length
+  }).catch(() => {})
+}
+
+// Initial badge load
+refreshTodoBadge()
+
+// Update badge when todos are extracted anywhere in the app
+if (typeof window !== 'undefined') {
+  window.addEventListener('vx:todos-updated', refreshTodoBadge)
+}
+
+// ── Open message from Todo drawer ───────────────────────────────────────────
+
+/**
+ * Navigate to a specific message when the Todo drawer requests it.
+ * Fetches the message to discover its folder, switches to that folder,
+ * then selects the message so it appears in the reading pane.
+ */
+async function openMessage(messageId: number): Promise<void> {
+  try {
+    // Fetch full message to get folderId (messages:get is the only single-message channel)
+    const message = await window.electronAPI.messages.get(messageId)
+    // Switch to mail view (TodoDrawer already does this, but be defensive)
+    viewMode.value = 'mail'
+    // Switch to the folder that contains this message — triggers MessageList's folder watcher
+    foldersStore.setActiveFolder(message.folderId)
+    // Select the message; this immediately loads the body into the reading pane
+    messagesStore.selectMessage(messageId)
+  } catch (err) {
+    console.error('[AppLayout] Failed to open message from todo:', err)
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('vx:open-message', (e: Event) => {
+    const { messageId } = (e as CustomEvent<{ messageId: number }>).detail
+    openMessage(messageId)
+  })
+}
+
 defineProps<{
   showMessageView?: boolean
 }>()
@@ -47,7 +108,12 @@ defineProps<{
 
 <template>
   <div class="app-layout">
-    <HeaderBar class="app-header" @compose="openCompose('new')" />
+    <HeaderBar
+      class="app-header"
+      :active-todo-count="activeTodoCount"
+      @compose="openCompose('new')"
+      @open-todos="todoDrawerVisible = true"
+    />
 
     <!-- Normal 3-panel mail view -->
     <div v-if="viewMode === 'mail'" class="app-body">
@@ -71,6 +137,11 @@ defineProps<{
       <ContactsView class="app-contacts-view" />
     </div>
 
+    <!-- Todo list view -->
+    <div v-else-if="viewMode === 'todos'" class="app-body app-body-todos">
+      <TodosView class="app-todos-view" />
+    </div>
+
     <StatusBar class="app-statusbar" />
 
     <!-- Compose Dialog (teleported to body by PrimeVue) -->
@@ -78,6 +149,14 @@ defineProps<{
       v-model:visible="composeVisible"
       :context="composeContext"
       @sent="onSent"
+    />
+
+    <!-- Todo Drawer (teleported to body by PrimeVue) -->
+    <TodoDrawer
+      ref="todoDrawerRef"
+      v-model:visible="todoDrawerVisible"
+      @show="onTodoDrawerShow"
+      @hide="refreshTodoBadge"
     />
   </div>
 </template>
@@ -149,6 +228,16 @@ defineProps<{
 }
 
 .app-contacts-view {
+  flex: 1;
+  background: var(--vx-bg-primary);
+  overflow: hidden;
+}
+
+.app-body-todos {
+  display: flex;
+}
+
+.app-todos-view {
   flex: 1;
   background: var(--vx-bg-primary);
   overflow: hidden;
