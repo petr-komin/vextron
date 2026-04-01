@@ -1,6 +1,10 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres'
 import pg from 'pg'
 import * as schema from './schema'
+import dotenv from 'dotenv'
+import path from 'path'
+
+dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
 const { Pool } = pg
 
@@ -17,12 +21,12 @@ export interface DbConfig {
 }
 
 const DEFAULT_CONFIG: DbConfig = {
-  host: 'localhost',
-  port: 5432,
-  database: 'vextron',
-  user: 'vextron',
-  password: 'vextron',
-  ssl: { rejectUnauthorized: false }
+  host: process.env.DB_HOST || 'localhost',
+  port: Number(process.env.DB_PORT) || 5432,
+  database: process.env.DB_NAME || 'vextron',
+  user: process.env.DB_USER || 'vextron',
+  password: process.env.DB_PASSWORD || 'vextron',
+  ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false }
 }
 
 export function initDb(config: Partial<DbConfig> = {}): NodePgDatabase<typeof schema> {
