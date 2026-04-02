@@ -10,6 +10,20 @@ import type { ImapFlow } from 'imapflow'
 
 type FolderType = 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam' | 'archive' | 'custom'
 
+/**
+ * Convert a stored folder path to the native server path.
+ * Paths are stored in DB using whatever delimiter the server reported at sync time.
+ * If the stored path contains '/' but the server uses a different delimiter (e.g. '.'),
+ * we replace '/' with the actual delimiter so IMAP commands don't fail with
+ * "Invalid mailbox name: Name must not have '/' characters".
+ */
+export function toServerPath(folder: { path: string; delimiter: string }): string {
+  const delim = folder.delimiter || '/'
+  if (delim === '/' || !folder.path.includes('/')) return folder.path
+  // Replace stored '/' separator with the server's actual delimiter
+  return folder.path.split('/').join(delim)
+}
+
 /** Map IMAP specialUse flags to our folder types */
 function mapSpecialUse(specialUse?: string): FolderType {
   switch (specialUse) {
@@ -161,7 +175,7 @@ async function processPendingDeletes(
   try {
     for (const msg of pendingDeletes) {
       try {
-        await client.messageMove(msg.uid.toString(), trashFolder.path, { uid: true })
+        await client.messageMove(msg.uid.toString(), toServerPath(trashFolder), { uid: true })
         // IMAP move succeeded — update local folderId to Trash
         await db.update(messages)
           .set({ folderId: trashFolder.id })
@@ -193,7 +207,7 @@ export async function syncFolderMessages(
   return imapManager.withClient(accountId, async (client) => {
     const newMessageIds: number[] = []
 
-    const lock = await client.getMailboxLock(folder.path)
+    const lock = await client.getMailboxLock(toServerPath(folder))
     try {
       const mailboxStatus = client.mailbox
       if (!mailboxStatus) {
@@ -346,7 +360,7 @@ export async function syncFolderMessages(
 
     // Retry any pending deletes (soft-deleted messages not yet moved to Trash on IMAP)
     try {
-      await processPendingDeletes(accountId, folderId, folder.path, client)
+      await processPendingDeletes(accountId, folderId, toServerPath(folder), client)
     } catch (err) {
       console.warn(`[sync] processPendingDeletes failed for folder ${folder.path}:`, err)
     }
@@ -388,7 +402,7 @@ export async function fetchMessageBody(
     let bodyHtml = ''
     let attachmentMeta: Array<{ filename: string; contentType: string; size: number; partNumber: string; contentId?: string }> = []
 
-    const lock = await client.getMailboxLock(folder.path)
+    const lock = await client.getMailboxLock(toServerPath(folder))
     try {
       const source = await client.download(String(msg.uid), undefined, { uid: true })
       if (source?.content) {

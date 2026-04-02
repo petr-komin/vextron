@@ -4,6 +4,7 @@ import { getDb } from '../db/connection'
 import { accounts, folders } from '../db/schema'
 import { eq, and } from 'drizzle-orm'
 import { imapManager } from '../imap/connection-manager'
+import { toServerPath } from '../imap/sync'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,9 @@ async function createTransport(accountId: number): Promise<{ transporter: Transp
     ...(account.smtpSecurity === 'starttls' ? { requireTLS: true } : {})
   })
 
-  return { transporter, fromAddress: account.email }
+  // Use displayName if set, fall back to account name, then bare email address
+  const senderName = account.displayName?.trim() || account.name?.trim() || ''
+  return { transporter, fromAddress: senderName ? `${senderName} <${account.email}>` : account.email }
 }
 
 // ─── Send ────────────────────────────────────────────────────────────────────
@@ -165,8 +168,9 @@ async function appendToSentFolder(
   const rawMessage = rawParts.join('\r\n')
 
   await imapManager.withClient(accountId, async (client) => {
-    await client.append(sentFolder.path, Buffer.from(rawMessage), ['\\Seen'])
-    console.log(`[SMTP] Appended sent message to "${sentFolder.path}" folder`)
+    const serverPath = toServerPath(sentFolder)
+    await client.append(serverPath, Buffer.from(rawMessage), ['\\Seen'])
+    console.log(`[SMTP] Appended sent message to "${serverPath}" folder`)
   })
 }
 

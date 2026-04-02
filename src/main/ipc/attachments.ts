@@ -4,6 +4,7 @@ import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
 import { eq } from 'drizzle-orm'
 import { imapManager } from '../services/imap/connection-manager'
+import { toServerPath } from '../services/imap/sync'
 import type { AttachmentSaveResult } from '../../shared/types'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -25,7 +26,7 @@ async function fetchAttachmentContent(
   if (!folder) throw new Error(`Folder ${msg.folderId} not found`)
 
   return imapManager.withClient(msg.accountId, async (client) => {
-    const lock = await client.getMailboxLock(folder.path)
+    const lock = await client.getMailboxLock(toServerPath(folder))
     try {
       const source = await client.download(String(msg.uid), undefined, { uid: true })
       if (!source?.content) {

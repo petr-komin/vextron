@@ -5,7 +5,7 @@ import { messages } from '../services/db/schema/messages'
 import { folders } from '../services/db/schema/folders'
 import { accounts } from '../services/db/schema/accounts'
 import { eq, desc, and, or, sql, ilike, inArray, isNull, isNotNull, type SQL } from 'drizzle-orm'
-import { syncFolderMessages, fetchMessageBody } from '../services/imap/sync'
+import { syncFolderMessages, fetchMessageBody, toServerPath } from '../services/imap/sync'
 import { imapManager } from '../services/imap/connection-manager'
 
 /** Build shared WHERE conditions from filters (date, unread, search). */
@@ -279,16 +279,16 @@ export const messagesHandlers = {
 
       // Get source folder IMAP path
       const [srcFolder] = await db
-        .select({ path: folders.path })
+        .select({ path: folders.path, delimiter: folders.delimiter })
         .from(folders)
         .where(eq(folders.id, msg.folderId))
       if (!srcFolder) return
 
       if (imapManager.isConnected(msg.accountId)) {
         await imapManager.withClient(msg.accountId, async (client) => {
-          const lock = await client.getMailboxLock(srcFolder.path)
+          const lock = await client.getMailboxLock(toServerPath(srcFolder))
           try {
-            await client.messageMove(msg.uid.toString(), trashFolder.path, { uid: true })
+            await client.messageMove(msg.uid.toString(), toServerPath(trashFolder), { uid: true })
           } finally {
             lock.release()
           }
