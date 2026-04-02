@@ -1,5 +1,7 @@
 import nodemailer from 'nodemailer'
 import type { Transporter } from 'nodemailer'
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const MailComposer = require('nodemailer/lib/mail-composer')
 import { getDb } from '../db/connection'
 import { accounts, folders } from '../db/schema'
 import { eq, and } from 'drizzle-orm'
@@ -86,17 +88,19 @@ export async function sendMail(options: SendMailOptions): Promise<SendMailResult
     if (inReplyTo) (mailOptions.headers as Record<string, string>)['In-Reply-To'] = inReplyTo
     if (references?.length) (mailOptions.headers as Record<string, string>)['References'] = references.join(' ')
 
-    // 3. Send via SMTP
+    // 3. Send via SMTP — keep transporter open so we can use buildMessage too
     console.log(`[SMTP] Sending email from ${fromAddress} to ${to.join(', ')} (subject: "${subject}")`)
     const info = await transporter.sendMail(mailOptions)
     console.log(`[SMTP] Sent successfully, messageId: ${info.messageId}`)
 
     // 4. Append to Sent folder via IMAP (best-effort)
+    // Build the raw RFC822 message using nodemailer's own builder so encoding is correct
     try {
-      await appendToSentFolder(accountId, info.envelope, mailOptions, info.messageId)
+      const rawMessage = await buildRawMessage(transporter, mailOptions)
+      await appendToSentFolder(accountId, rawMessage)
     } catch (appendErr) {
       const msg = appendErr instanceof Error ? appendErr.message : String(appendErr)
-      console.warn(`[SMTP] Failed to append to Sent folder: ${msg}`)
+      console.warn(`[SMTP] Failed to append to Sent folder: ${msg}`, appendErr)
       // Non-fatal: email was sent successfully
     }
 
@@ -113,14 +117,25 @@ export async function sendMail(options: SendMailOptions): Promise<SendMailResult
 // ─── Append to Sent ──────────────────────────────────────────────────────────
 
 /**
- * Build a raw RFC822 message and append it to the Sent folder via IMAP APPEND.
- * This ensures the sent message shows up in the user's Sent folder.
+ * Use nodemailer's MailComposer to generate a properly encoded RFC822 raw
+ * message buffer — handles subject encoding, MIME multipart, etc. correctly.
+ */
+function buildRawMessage(_transporter: Transporter, mailOptions: nodemailer.SendMailOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const composer = new MailComposer(mailOptions)
+    composer.compile().build((err: Error | null, message: Buffer) => {
+      if (err) return reject(err)
+      resolve(message)
+    })
+  })
+}
+
+/**
+ * Append the sent message to the account's Sent folder via IMAP APPEND.
  */
 async function appendToSentFolder(
   accountId: number,
-  _envelope: unknown,
-  mailOptions: nodemailer.SendMailOptions,
-  messageId: string
+  rawMessage: Buffer
 ): Promise<void> {
   const db = getDb()
 
@@ -136,40 +151,11 @@ async function appendToSentFolder(
     return
   }
 
-  // Build a minimal RFC822 message for IMAP APPEND
-  const date = new Date()
-  const rawParts: string[] = [
-    `From: ${mailOptions.from}`,
-    `To: ${mailOptions.to}`,
-    `Subject: ${mailOptions.subject || '(no subject)'}`,
-    `Date: ${date.toUTCString()}`,
-    `Message-ID: ${messageId}`,
-    `MIME-Version: 1.0`
-  ]
-
-  if (mailOptions.cc) rawParts.push(`Cc: ${mailOptions.cc}`)
-  if (mailOptions.headers) {
-    const hdrs = mailOptions.headers as Record<string, string>
-    if (hdrs['In-Reply-To']) rawParts.push(`In-Reply-To: ${hdrs['In-Reply-To']}`)
-    if (hdrs['References']) rawParts.push(`References: ${hdrs['References']}`)
-  }
-
-  if (mailOptions.html) {
-    rawParts.push(`Content-Type: text/html; charset=utf-8`)
-    rawParts.push(`Content-Transfer-Encoding: quoted-printable`)
-    rawParts.push('')
-    rawParts.push(String(mailOptions.html))
-  } else {
-    rawParts.push(`Content-Type: text/plain; charset=utf-8`)
-    rawParts.push('')
-    rawParts.push(String(mailOptions.text || ''))
-  }
-
-  const rawMessage = rawParts.join('\r\n')
+  const serverPath = toServerPath(sentFolder)
+  console.log(`[SMTP] Appending to Sent folder: path="${sentFolder.path}" delimiter="${sentFolder.delimiter}" serverPath="${serverPath}"`)
 
   await imapManager.withClient(accountId, async (client) => {
-    const serverPath = toServerPath(sentFolder)
-    await client.append(serverPath, Buffer.from(rawMessage), ['\\Seen'])
+    await client.append(serverPath, rawMessage, ['\\Seen'])
     console.log(`[SMTP] Appended sent message to "${serverPath}" folder`)
   })
 }
